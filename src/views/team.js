@@ -1,8 +1,8 @@
-/* Team roster: invite, approve, pause, promote. */
+/* Team roster and the codes people use to join it. */
 
 import { el, esc, toast, busy, sheet, confirmSheet, timeAgo, initials } from '../ui.js';
 import * as data from '../data.js';
-import { state } from '../store.js';
+import { state, setState } from '../store.js';
 import { emptyState, skeletonList, sectionHead } from './components.js';
 import { navigate } from '../router.js';
 
@@ -13,75 +13,14 @@ export async function teamView(container) {
   container.appendChild(shell);
 
   const refresh = () => teamView(container);
-  const [team, invites, todayStats] = await Promise.all([
+  const [team, todayStats] = await Promise.all([
     data.listTeam(),
-    data.listInvites().catch(() => []),
     data.employeeDayStats(data.todayStr()).catch(() => []),
   ]);
   const statsById = new Map(todayStats.map((s) => [s.id, s]));
 
   shell.innerHTML = '';
-
-  const add = el('<button class="btn block">＋ Add a team member</button>');
-  add.onclick = () => openInviteSheet(refresh);
-  shell.appendChild(add);
-
-  const pending = team.filter((p) => p.status === 'pending');
-  if (pending.length) {
-    const sec = el(`<div class="section">${sectionHead('Waiting for approval', pending.length)}</div>`);
-    for (const p of pending) {
-      const row = el(`
-        <div class="list-row">
-          <span class="avatar">${esc(initials(p.full_name || p.email))}</span>
-          <span class="grow">
-            <span style="font-weight:650;display:block">${esc(p.full_name || p.email)}</span>
-            <span class="small muted">${esc(p.email)} · asked ${esc(timeAgo(p.created_at))}</span>
-          </span>
-          <button class="btn sm" data-approve>Approve</button>
-          <button class="icon-btn" data-deny title="Decline">✕</button>
-        </div>`);
-      row.querySelector('[data-approve]').onclick = async (e) => {
-        busy(e.currentTarget);
-        try {
-          await data.updateMember(p.id, { status: 'active' });
-          toast(`${p.full_name || p.email} can now log tasks`, 'ok');
-          refresh();
-        } catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
-      };
-      row.querySelector('[data-deny]').onclick = async () => {
-        const yes = await confirmSheet({
-          title: 'Decline this request?', message: `${p.email} will not be able to use the app.`,
-          confirmLabel: 'Decline', danger: true,
-        });
-        if (!yes) return;
-        try { await data.updateMember(p.id, { status: 'disabled' }); refresh(); }
-        catch (err) { toast(err.message, 'error'); }
-      };
-      sec.appendChild(row);
-    }
-    shell.appendChild(sec);
-  }
-
-  if (invites.length) {
-    const sec = el(`<div class="section">${sectionHead('Invited — waiting for first sign-in', invites.length)}</div>`);
-    for (const i of invites) {
-      const row = el(`
-        <div class="list-row">
-          <span class="avatar sm">✉️</span>
-          <span class="grow">
-            <span style="font-weight:650;display:block">${esc(i.email)}</span>
-            <span class="small muted">${esc(i.role === 'admin' ? 'Manager' : 'Crew')} · invited ${esc(timeAgo(i.created_at))}</span>
-          </span>
-          <button class="icon-btn" data-cancel title="Cancel invite">✕</button>
-        </div>`);
-      row.querySelector('[data-cancel]').onclick = async () => {
-        try { await data.cancelInvite(i.email); refresh(); }
-        catch (err) { toast(err.message, 'error'); }
-      };
-      sec.appendChild(row);
-    }
-    shell.appendChild(sec);
-  }
+  shell.appendChild(codeCard(refresh));
 
   const active = team.filter((p) => p.status === 'active');
   const paused = team.filter((p) => p.status === 'disabled');
@@ -90,14 +29,14 @@ export async function teamView(container) {
     const s = statsById.get(p.id);
     const row = el(`
       <div class="list-row" style="cursor:pointer">
-        <span class="avatar">${esc(initials(p.full_name || p.email))}</span>
+        <span class="avatar">${esc(initials(p.name || p.email))}</span>
         <span class="grow">
-          <span style="font-weight:650;display:block">${esc(p.full_name || p.email)}
-            ${p.role === 'admin' ? '<span class="chip brand" style="margin-left:6px">Manager</span>' : ''}</span>
+          <span style="font-weight:650;display:block">${esc(p.name || p.email)}
+            ${p.role === 'manager' ? '<span class="chip brand" style="margin-left:6px">Manager</span>' : ''}</span>
           <span class="small muted">${esc(p.job_title || p.email)}</span>
           <span class="small muted" style="display:block">
             ${s ? `${s.completed}/${s.assigned} done today` : 'No tasks today'} ·
-            ${p.last_seen_at ? `seen ${esc(timeAgo(p.last_seen_at))}` : 'never signed in'}
+            ${p.last_seen_at ? `seen ${esc(timeAgo(p.last_seen_at))}` : 'not opened yet'}
           </span>
         </span>
         <span class="icon-btn">›</span>
@@ -107,8 +46,9 @@ export async function teamView(container) {
   };
 
   const sec = el(`<div class="section">${sectionHead('Your team', active.length)}</div>`);
-  if (!active.length) {
-    sec.appendChild(emptyState('👷', 'No one on the roster yet', 'Add your crew by email — they sign in with a code and stay signed in.'));
+  if (active.length <= 1) {
+    sec.appendChild(emptyState('👷', 'Nobody has joined yet',
+      'Send your crew the app link and the code above. They enter their name, verify their email, then type the code.'));
   }
   active.forEach((p) => sec.appendChild(renderPerson(p)));
   shell.appendChild(sec);
@@ -120,83 +60,101 @@ export async function teamView(container) {
   }
 }
 
-function openInviteSheet(onDone) {
-  const body = el(`
-    <div>
-      <div class="field">
-        <label for="inv-email">Work email</label>
-        <input class="input" id="inv-email" type="email" inputmode="email" autocapitalize="none"
-               autocomplete="off" placeholder="name@company.com">
-        <div class="hint">They sign in with this email — no password to remember.</div>
+/** The big shareable code, plus manager-only controls. */
+export function codeCard(onChange) {
+  const team = state.team;
+  if (!team) return el('<div></div>');
+
+  const card = el(`
+    <div class="card center">
+      <div style="font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--muted)">CREW CODE</div>
+      <div style="font-size:36px;font-weight:800;letter-spacing:.16em;margin:6px 0 2px">${esc(team.join_code)}</div>
+      <p class="small muted">Anyone with this code can join <strong>${esc(team.name)}</strong> as crew.</p>
+      <div class="btn-row mt">
+        <button class="btn soft sm" data-share>Share</button>
+        <button class="btn ghost sm" data-copy>Copy code</button>
       </div>
-      <div class="row">
-        <div class="field">
-          <label for="inv-name">Name</label>
-          <input class="input" id="inv-name" placeholder="Optional" maxlength="80">
-        </div>
-        <div class="field">
-          <label for="inv-title">Job title</label>
-          <input class="input" id="inv-title" placeholder="Optional" maxlength="60">
-        </div>
-      </div>
-      <div class="field">
-        <label for="inv-role">Role</label>
-        <select class="select" id="inv-role">
-          <option value="employee">Crew — logs their own tasks</option>
-          <option value="admin">Manager — sees everyone and signs off work</option>
-        </select>
-      </div>
-      <div class="banner info">
-        <span class="ic">💡</span>
-        <div>Send them the app link. The first time they open it they enter this email, type the code we email them, and they're in — for good on that phone.</div>
+      <div class="btn-row mt">
+        <button class="btn ghost sm" data-manager>Manager code</button>
+        <button class="btn ghost sm" data-rotate>New code</button>
       </div>
     </div>`);
-  const foot = el(`<div style="display:flex;gap:10px;width:100%">
-    <button class="btn ghost" style="flex:1" data-close>Cancel</button>
-    <button class="btn" style="flex:2" data-save>Add to team</button>
-  </div>`);
-  const s = sheet({ title: 'Add a team member', body, footer: foot });
-  setTimeout(() => body.querySelector('#inv-email').focus(), 90);
 
-  foot.querySelector('[data-save]').onclick = async (e) => {
-    const email = body.querySelector('#inv-email').value.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
-      toast('Enter a valid email address', 'error');
-      return;
+  const shareText = `Join ${team.name} on the task tracker:\n${location.origin}\n\nTeam code: ${team.join_code}`;
+
+  card.querySelector('[data-share]').onclick = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: team.name, text: shareText });
+        return;
+      } catch { /* cancelled */ }
     }
-    busy(e.currentTarget);
     try {
-      await data.inviteMember({
-        email,
-        fullName: body.querySelector('#inv-name').value.trim(),
-        jobTitle: body.querySelector('#inv-title').value.trim(),
-        role: body.querySelector('#inv-role').value,
-      });
-      s.close();
-      toast('Added — share the app link with them', 'ok');
-      onDone?.();
-    } catch (err) {
-      toast(err.message, 'error');
-      busy(e.currentTarget, false);
+      await navigator.clipboard.writeText(shareText);
+      toast('Invite copied — paste it into a text', 'ok');
+    } catch {
+      toast(`Team code: ${team.join_code}`);
     }
   };
+
+  card.querySelector('[data-copy]').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(team.join_code);
+      toast('Code copied', 'ok');
+    } catch {
+      toast(`Team code: ${team.join_code}`);
+    }
+  };
+
+  card.querySelector('[data-manager]').onclick = () => {
+    sheet({
+      title: 'Manager code',
+      body: `
+        <p class="small muted">Someone who joins with this code becomes a <strong>manager</strong> —
+        they can see everyone's work, assign tasks and sign off on photos. Only share it with people
+        who should run the crew.</p>
+        <div class="card center mt">
+          <div style="font-size:32px;font-weight:800;letter-spacing:.16em">${esc(team.manager_code)}</div>
+        </div>`,
+      footer: el('<button class="btn ghost" style="flex:1" data-close>Close</button>'),
+    });
+  };
+
+  card.querySelector('[data-rotate]').onclick = async () => {
+    const yes = await confirmSheet({
+      title: 'Get a new crew code?',
+      message: 'The old code stops working right away. People already on the team stay on it.',
+      confirmLabel: 'New code',
+    });
+    if (!yes) return;
+    try {
+      const team2 = await data.rotateTeamCode('join');
+      setState({ team: team2 });
+      toast('New code ready', 'ok');
+      onChange?.();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  return card;
 }
 
 function openMemberSheet(person, onDone) {
-  const self = person.id === state.profile.id;
+  const self = person.id === state.me.id;
   const body = el(`
     <div>
       <div class="person">
-        <span class="avatar">${esc(initials(person.full_name || person.email))}</span>
+        <span class="avatar">${esc(initials(person.name || person.email))}</span>
         <span class="who">
-          <span class="name">${esc(person.full_name || person.email)}</span>
+          <span class="name">${esc(person.name || person.email)}</span>
           <span class="sub">${esc(person.email)}</span>
         </span>
       </div>
       <div class="row mt-lg">
         <div class="field">
           <label for="mem-name">Name</label>
-          <input class="input" id="mem-name" value="${esc(person.full_name || '')}" maxlength="80">
+          <input class="input" id="mem-name" value="${esc(person.name || '')}" maxlength="80">
         </div>
         <div class="field">
           <label for="mem-title">Job title</label>
@@ -207,7 +165,7 @@ function openMemberSheet(person, onDone) {
         <label for="mem-role">Role</label>
         <select class="select" id="mem-role" ${self ? 'disabled' : ''}>
           <option value="employee" ${person.role === 'employee' ? 'selected' : ''}>Crew</option>
-          <option value="admin" ${person.role === 'admin' ? 'selected' : ''}>Manager</option>
+          <option value="manager" ${person.role === 'manager' ? 'selected' : ''}>Manager</option>
         </select>
         ${self ? '<div class="hint">You cannot change your own role.</div>' : ''}
       </div>
@@ -233,7 +191,7 @@ function openMemberSheet(person, onDone) {
     if (turningOff) {
       const yes = await confirmSheet({
         title: 'Turn off access?',
-        message: `${person.full_name || person.email} will be signed out and cannot log tasks until you turn it back on.`,
+        message: `${person.name || person.email} will not be able to log tasks until you turn it back on.`,
         confirmLabel: 'Turn off',
         danger: true,
       });
@@ -252,7 +210,7 @@ function openMemberSheet(person, onDone) {
     busy(e.currentTarget);
     try {
       const patch = {
-        full_name: body.querySelector('#mem-name').value.trim(),
+        name: body.querySelector('#mem-name').value.trim(),
         job_title: body.querySelector('#mem-title').value.trim(),
       };
       if (!self) patch.role = body.querySelector('#mem-role').value;

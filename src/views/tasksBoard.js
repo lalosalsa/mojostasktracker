@@ -6,7 +6,7 @@ import { navigate } from '../router.js';
 import { taskCard, emptyState, skeletonList, sectionHead, statTile } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 
-export async function tasksAdminView(container, params = {}) {
+export async function taskBoardView(container, params = {}) {
   container.innerHTML = '';
   const shell = el('<div></div>');
   shell.appendChild(skeletonList(4));
@@ -17,7 +17,7 @@ export async function tasksAdminView(container, params = {}) {
   const status = params.status || 'all';
 
   const fab = el('<button class="fab">＋ New task</button>');
-  fab.onclick = () => openTaskEditor(null, () => tasksAdminView(container, params));
+  fab.onclick = () => openTaskEditor(null, () => taskBoardView(container, params));
   container.appendChild(fab);
 
   await data.ensureTodaysTasks(date);
@@ -31,7 +31,7 @@ export async function tasksAdminView(container, params = {}) {
     }),
   ]);
 
-  const refresh = () => tasksAdminView(container, params);
+  const refresh = () => taskBoardView(container, params);
   const setParam = (patch) => {
     const next = { date, assignee, status, ...patch };
     const q = new URLSearchParams(
@@ -53,7 +53,7 @@ export async function tasksAdminView(container, params = {}) {
           <label for="f-person">Person</label>
           <select class="select" id="f-person">
             <option value="">Everyone</option>
-            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === assignee ? 'selected' : ''}>${esc(e.full_name || e.email)}</option>`).join('')}
+            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === assignee ? 'selected' : ''}>${esc(e.name || e.email)}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -90,7 +90,7 @@ export async function tasksAdminView(container, params = {}) {
 
   const byPerson = new Map();
   for (const t of data.sortTasks(tasks)) {
-    const key = t.assignee?.full_name || t.assignee?.email || 'Unassigned';
+    const key = t.assignee?.name || t.assignee?.email || 'Unassigned';
     if (!byPerson.has(key)) byPerson.set(key, []);
     byPerson.get(key).push(t);
   }
@@ -123,7 +123,7 @@ export async function openTaskEditor(existing, onDone) {
           <label for="t-who">Assign to</label>
           <select class="select" id="t-who">
             <option value="">Anyone on the crew</option>
-            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === t.assigned_to ? 'selected' : ''}>${esc(e.full_name || e.email)}</option>`).join('')}
+            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === t.assigned_to ? 'selected' : ''}>${esc(e.name || e.email)}</option>`).join('')}
           </select>
         </div>
         <div class="field">

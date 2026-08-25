@@ -2,38 +2,39 @@
 
 import { el, esc, toast, busy, confirmSheet, initials } from '../ui.js';
 import * as data from '../data.js';
-import { state, isAdmin, setState } from '../store.js';
+import { state, isManager, setState } from '../store.js';
 import { sb } from '../supabase.js';
 import { clearSupabaseConfig, getSupabaseConfig, APP_NAME } from '../config.js';
 import { navigate } from '../router.js';
+import { codeCard } from './team.js';
 
 export async function meView(container) {
   container.innerHTML = '';
-  const profile = state.profile;
-  const admin = isAdmin();
+  const me = state.me;
+  const admin = isManager();
 
   const card = el(`
     <div class="card">
       <div class="person">
-        <span class="avatar">${esc(initials(profile.full_name || profile.email))}</span>
+        <span class="avatar">${esc(initials(me.name || me.email))}</span>
         <span class="who">
-          <span class="name" style="font-size:16px">${esc(profile.full_name || 'Your name')}</span>
-          <span class="sub">${esc(profile.email)}</span>
+          <span class="name" style="font-size:16px">${esc(me.name || 'Your name')}</span>
+          <span class="sub">${esc(me.email)}</span>
         </span>
         <span class="chip ${admin ? 'brand' : ''}">${admin ? 'Manager' : 'Crew'}</span>
       </div>
       <div class="field mt-lg">
         <label for="me-name">Your name</label>
-        <input class="input" id="me-name" value="${esc(profile.full_name || '')}" maxlength="80" autocomplete="name">
+        <input class="input" id="me-name" value="${esc(me.name || '')}" maxlength="80" autocomplete="name">
       </div>
       <div class="row">
         <div class="field">
           <label for="me-title">Job title</label>
-          <input class="input" id="me-title" value="${esc(profile.job_title || '')}" maxlength="60">
+          <input class="input" id="me-title" value="${esc(me.job_title || '')}" maxlength="60">
         </div>
         <div class="field">
           <label for="me-phone">Phone</label>
-          <input class="input" id="me-phone" value="${esc(profile.phone || '')}" maxlength="30" inputmode="tel" autocomplete="tel">
+          <input class="input" id="me-phone" value="${esc(me.phone || '')}" maxlength="30" inputmode="tel" autocomplete="tel">
         </div>
       </div>
       <button class="btn block" data-save>Save details</button>
@@ -44,11 +45,11 @@ export async function meView(container) {
     busy(btn);
     try {
       const updated = await data.updateMyProfile({
-        full_name: card.querySelector('#me-name').value.trim(),
+        name: card.querySelector('#me-name').value.trim(),
         job_title: card.querySelector('#me-title').value.trim(),
         phone: card.querySelector('#me-phone').value.trim(),
       });
-      setState({ profile: updated });
+      setState({ me: updated });
       toast('Saved', 'ok');
     } catch (err) {
       toast(err.message, 'error');
@@ -99,13 +100,14 @@ export async function meView(container) {
   const account = el(`
     <div class="card mt">
       <h2 style="font-size:15px">Account</h2>
-      <p class="small muted mt">Signed in as ${esc(profile.email)}. This device stays signed in until you sign out.</p>
+      <p class="small muted mt">Signed in as ${esc(me.email)}${state.team ? ` on ${esc(state.team.name)}` : ''}.
+         This device stays signed in until you sign out.</p>
       <button class="btn ghost block mt" data-signout>Sign out</button>
     </div>`);
   account.querySelector('[data-signout]').onclick = async () => {
     const yes = await confirmSheet({
       title: 'Sign out?',
-      message: 'You will need your email code to get back in on this device.',
+      message: 'You will need a fresh email code to get back in on this device.',
       confirmLabel: 'Sign out',
       danger: true,
     });

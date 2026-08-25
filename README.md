@@ -1,8 +1,10 @@
 # Mojo's Task Tracker
 
-A task tracker for a working crew. Employees sign in once with their email,
-work through the day's list on their phone, and attach photos that prove each
-job is finished. The manager sees it all live and signs off on the proof.
+A task tracker for a working crew. A manager creates a team and shares a
+6-character code; the crew signs up with their name and email, types the code,
+and they're in. From then on they work through the day's list on their phone and
+attach photos that prove each job is finished. The manager sees it all live and
+signs off on the proof.
 
 Installs to a phone's home screen and opens like a normal app — no app store,
 no passwords to remember.
@@ -16,9 +18,18 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 
 ## What it does
 
+**Signing up**
+
+- Name + email, verified with a **6-digit code** in the email (no passwords, no
+  magic links). The phone then stays signed in.
+- A manager creates a team and gets a **crew code** to share, plus a separate
+  **manager code** for anyone who should also review work.
+- Everyone else joins by typing that code. Anyone can come back later from any
+  device with the same email and a fresh code.
+- Teams are sealed off from each other: no code, no access.
+
 **For the crew**
 
-- Sign in with a work email and a 6-digit code — then the phone stays signed in.
 - "Today" screen with the day's assigned work, progress ring, and what's left.
 - Open a task → take photos → add notes → mark it done.
 - A task that requires a photo *cannot* be marked done without one. That rule is
@@ -35,8 +46,8 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 - Task board: assign work to anyone, for any day, with priority and location.
 - Recurring checklists: daily / weekday / weekly jobs that appear automatically
   each morning.
-- Team: invite by email, approve people who sign themselves up, promote another
-  manager, or turn off access instantly.
+- Team: share or re-issue the join code, promote another manager, edit names, or
+  turn off someone's access instantly.
 - Reports: totals over any date range plus a CSV export for payroll or clients.
 
 **As an app**
@@ -52,15 +63,17 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 
 Every rule lives in Postgres, so a tampered client cannot get around it:
 
-- Row level security scopes each crew member to their own tasks and photos; a
-  manager sees everything.
+- Row level security scopes everything to your own team first, then to your own
+  tasks and photos; a manager sees their whole team and nothing beyond it.
 - Photos live in a **private** storage bucket, served through short-lived signed
   URLs. Files are laid out as `<user-id>/<task-id>/<file>` and storage policies
   keep people out of each other's folders.
 - Employees cannot verify their own work, promote themselves, reassign a task,
   or edit a manager's review note — database triggers reject all of it.
-- People who sign up on their own land in a waiting room with no access at all
-  until a manager approves them.
+- Signing up gets you an account but no team. Until you enter a valid code you
+  can see nothing at all.
+- Join codes skip characters people misread (no O, I or L) and a manager can
+  rotate them at any time.
 
 ## Local development
 
@@ -91,8 +104,10 @@ shell. Screenshots land in `test/shots/`.
 
 `npm run test:db` needs PostgreSQL 16 installed locally. It proves the schema
 applies cleanly (twice — it's idempotent) and then checks the rules that matter:
-employees can't see each other's work, can't finish a task without a photo,
-can't verify themselves, and pending users can do nothing.
+one team cannot see another team's tasks, members or photos; a wrong code is
+refused; employees can't see each other's work, finish a task without a photo,
+verify themselves, or promote themselves; and the last manager can't strand a
+team.
 
 ## Project layout
 
@@ -106,6 +121,7 @@ src/                 app source (plain ES modules, no framework)
   views/             one file per screen
   index.html         app shell   styles.css   manifest   sw.js   icons/
 supabase/schema.sql  tables, RLS policies, triggers, RPCs, storage bucket
+supabase/reset.sql   drops it all, for starting over from an older version
 scripts/build.js     esbuild bundle → public/, stamps the service worker
 scripts/generate-icons.js   draws the PNG app icons from scratch
 test/                browser smoke test + SQL rule tests

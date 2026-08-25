@@ -1,7 +1,16 @@
 -- =============================================================================
 --  Mojo's Task Tracker — Supabase schema
---  Run this once in Supabase Studio → SQL Editor → New query → Run.
---  Safe to re-run: everything is create-if-not-exists / create-or-replace.
+--
+--  Sign-up model:
+--    · Everyone signs up with their name + email and verifies with a 6-digit
+--      code (no passwords, no magic links).
+--    · A manager then creates a team and gets two codes to share.
+--    · Employees join that team by typing the code.
+--    · Coming back later is the same email + a fresh code.
+--
+--  Run this in Supabase Studio → SQL Editor → New query → Run.
+--  Re-runnable. If you ran an older version of this file first, run
+--  supabase/reset.sql once before this one.
 -- =============================================================================
 
 create extension if not exists "pgcrypto";
@@ -10,55 +19,58 @@ create extension if not exists "pgcrypto";
 --  TABLES
 -- =============================================================================
 
--- Everyone who can sign in. Row is created automatically by a trigger on signup.
-create table if not exists public.profiles (
+create table if not exists public.teams (
+  id           uuid primary key default gen_random_uuid(),
+  name         text not null,
+  join_code    text not null unique,          -- crew members join with this
+  manager_code text not null unique,          -- a second manager joins with this
+  created_at   timestamptz not null default now()
+);
+
+-- A person. Created automatically the first time they verify their email.
+-- team_id stays null until they create a team or join one with a code.
+create table if not exists public.members (
   id           uuid primary key references auth.users(id) on delete cascade,
+  team_id      uuid references public.teams(id) on delete set null,
   email        text not null,
-  full_name    text not null default '',
-  role         text not null default 'employee' check (role in ('employee', 'admin')),
-  status       text not null default 'pending'  check (status in ('active', 'pending', 'disabled')),
+  name         text not null default '',
+  role         text not null default 'employee' check (role in ('employee', 'manager')),
+  status       text not null default 'active'  check (status in ('active', 'disabled')),
   job_title    text not null default '',
   phone        text not null default '',
   created_at   timestamptz not null default now(),
   last_seen_at timestamptz
 );
+create index if not exists members_team_idx on public.members (team_id);
 
--- Emails a manager has pre-approved: they skip the waiting room on first sign-in.
-create table if not exists public.invites (
-  email      text primary key,
-  role       text not null default 'employee' check (role in ('employee', 'admin')),
-  full_name  text not null default '',
-  job_title  text not null default '',
-  invited_by uuid references public.profiles(id) on delete set null,
-  created_at timestamptz not null default now()
-);
-
--- Recurring checklist items; these spawn a fresh task each work day.
 create table if not exists public.task_templates (
   id             bigint generated always as identity primary key,
+  team_id        uuid not null references public.teams(id) on delete cascade,
   title          text not null,
   description    text not null default '',
   location       text not null default '',
   priority       text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
   requires_photo boolean not null default true,
-  assigned_to    uuid references public.profiles(id) on delete set null,
+  assigned_to    uuid references public.members(id) on delete set null,
   recurrence     text not null default 'daily' check (recurrence in ('daily', 'weekdays', 'weekly')),
   weekday        smallint check (weekday between 0 and 6),   -- 0 = Sunday
   active         boolean not null default true,
-  created_by     uuid references public.profiles(id) on delete set null,
+  created_by     uuid references public.members(id) on delete set null,
   created_at     timestamptz not null default now()
 );
+create index if not exists templates_team_idx on public.task_templates (team_id);
 
 create table if not exists public.tasks (
   id             bigint generated always as identity primary key,
+  team_id        uuid not null references public.teams(id) on delete cascade,
   title          text not null,
   description    text not null default '',
   location       text not null default '',
   status         text not null default 'open'
                  check (status in ('open', 'in_progress', 'submitted', 'verified', 'rejected')),
   priority       text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
-  assigned_to    uuid references public.profiles(id) on delete set null,
-  created_by     uuid references public.profiles(id) on delete set null,
+  assigned_to    uuid references public.members(id) on delete set null,
+  created_by     uuid references public.members(id) on delete set null,
   requires_photo boolean not null default true,
   work_date      date not null default current_date,
   due_date       date,
@@ -70,20 +82,18 @@ create table if not exists public.tasks (
   started_at     timestamptz,
   completed_at   timestamptz,
   reviewed_at    timestamptz,
-  reviewed_by    uuid references public.profiles(id) on delete set null
+  reviewed_by    uuid references public.members(id) on delete set null
 );
-
+create index if not exists tasks_team_date_idx     on public.tasks (team_id, work_date desc);
 create index if not exists tasks_assigned_date_idx on public.tasks (assigned_to, work_date desc);
 create index if not exists tasks_status_idx        on public.tasks (status);
-create index if not exists tasks_work_date_idx     on public.tasks (work_date desc);
 create unique index if not exists tasks_template_day_idx
   on public.tasks (template_id, work_date) where template_id is not null;
 
--- Photo proof. The file itself lives in the `task-photos` storage bucket.
 create table if not exists public.task_photos (
   id           bigint generated always as identity primary key,
   task_id      bigint not null references public.tasks(id) on delete cascade,
-  user_id      uuid references public.profiles(id) on delete set null,
+  member_id    uuid references public.members(id) on delete set null,
   storage_path text not null,
   thumb_path   text,
   mime         text not null default 'image/jpeg',
@@ -98,88 +108,88 @@ create table if not exists public.task_photos (
 );
 create index if not exists task_photos_task_idx on public.task_photos (task_id);
 
--- Audit trail shown in the manager's activity feed.
 create table if not exists public.activity (
   id         bigint generated always as identity primary key,
+  team_id    uuid not null references public.teams(id) on delete cascade,
   task_id    bigint references public.tasks(id) on delete cascade,
-  actor_id   uuid references public.profiles(id) on delete set null,
+  actor_id   uuid references public.members(id) on delete set null,
   actor_name text not null default '',
   type       text not null,
   detail     text not null default '',
   created_at timestamptz not null default now()
 );
-create index if not exists activity_created_idx on public.activity (created_at desc);
+create index if not exists activity_team_idx on public.activity (team_id, id desc);
 
 -- =============================================================================
---  HELPERS
+--  WHO AM I
 -- =============================================================================
 
-create or replace function public.is_admin()
+/** Short human-friendly code. Skips characters people misread (0/O, 1/I/L). */
+create or replace function public.gen_code(p_len integer default 6)
+returns text language plpgsql volatile as $$
+declare
+  alphabet constant text := '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  out text := '';
+begin
+  for _ in 1..p_len loop
+    out := out || substr(alphabet, 1 + floor(random() * length(alphabet))::int, 1);
+  end loop;
+  return out;
+end $$;
+
+/** Codes are typed by hand, so accept spaces, dashes and lower case. */
+create or replace function public.normalize_code(p_code text)
+returns text language sql immutable as $$
+  select upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+$$;
+
+create or replace function public.me()
+returns uuid language sql stable as $$ select auth.uid(); $$;
+
+create or replace function public.my_team()
+returns uuid language sql stable security definer set search_path = public as $$
+  select team_id from public.members where id = auth.uid() and status = 'active';
+$$;
+
+create or replace function public.is_manager()
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
-    select 1 from public.profiles
-     where id = auth.uid() and role = 'admin' and status = 'active'
+    select 1 from public.members
+     where id = auth.uid() and role = 'manager' and status = 'active' and team_id is not null
   );
 $$;
 
--- True for a manager *and* for server-side work that carries no JWT at all
--- (the Supabase SQL editor, the service_role key, scheduled jobs). Without this
--- the guard triggers below would silently undo a manager's manual fix-ups.
-create or replace function public.acts_as_admin()
+/** True for a manager, and for server-side work with no JWT at all (the SQL
+    editor, the service_role key) so a manager's manual fix-ups still apply. */
+create or replace function public.acts_as_manager()
 returns boolean language sql stable security definer set search_path = public as $$
-  select auth.uid() is null or public.is_admin();
-$$;
-
-create or replace function public.is_active()
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from public.profiles where id = auth.uid() and status = 'active'
-  );
+  select auth.uid() is null or public.is_manager();
 $$;
 
 create or replace function public.my_name()
 returns text language sql stable security definer set search_path = public as $$
-  select coalesce(nullif(full_name, ''), email, 'Someone') from public.profiles where id = auth.uid();
+  select coalesce(nullif(name, ''), email, 'Someone') from public.members where id = auth.uid();
 $$;
 
 -- =============================================================================
---  SIGN-UP HANDLING
---  First person to sign in becomes the manager. Invited emails are activated
---  straight away. Everyone else lands in the waiting room until approved.
+--  SIGN UP / CREATE A TEAM / JOIN A TEAM
+--  Verifying the emailed code creates the auth user; the trigger below turns
+--  that into a member row. Team membership is a second, separate step.
 -- =============================================================================
 
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare
-  v_role    text := 'employee';
-  v_status  text := 'pending';
-  v_name    text;
-  v_title   text := '';
-  v_invite  public.invites%rowtype;
 begin
-  if not exists (select 1 from public.profiles) then
-    v_role   := 'admin';
-    v_status := 'active';
-  else
-    select * into v_invite from public.invites where lower(email) = lower(new.email) limit 1;
-    if found then
-      v_role   := v_invite.role;
-      v_status := 'active';
-      v_title  := v_invite.job_title;
-    end if;
-  end if;
-
-  v_name := coalesce(
-    nullif(new.raw_user_meta_data ->> 'full_name', ''),
-    nullif(v_invite.full_name, ''),
-    initcap(replace(replace(split_part(new.email, '@', 1), '.', ' '), '_', ' '))
-  );
-
-  insert into public.profiles (id, email, full_name, role, status, job_title)
-  values (new.id, lower(new.email), v_name, v_role, v_status, coalesce(v_title, ''))
+  insert into public.members (id, email, name)
+  values (
+    new.id,
+    lower(new.email),
+    coalesce(
+      nullif(new.raw_user_meta_data ->> 'full_name', ''),
+      initcap(replace(replace(split_part(new.email, '@', 1), '.', ' '), '_', ' '))
+    )
+  )
   on conflict (id) do update set email = excluded.email;
-
-  delete from public.invites where lower(email) = lower(new.email);
   return new;
 end $$;
 
@@ -188,6 +198,157 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+/** Whoever is signed in on this device, plus their team if they have one. */
+create or replace function public.whoami()
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  v_member public.members;
+  v_team   public.teams;
+begin
+  select * into v_member from public.members where id = auth.uid();
+  if not found then return null; end if;
+
+  update public.members set last_seen_at = now() where id = v_member.id;
+  if v_member.team_id is not null then
+    select * into v_team from public.teams where id = v_member.team_id;
+  end if;
+
+  return json_build_object(
+    'member', row_to_json(v_member),
+    'team', case when v_team.id is null then null else row_to_json(v_team) end
+  );
+end $$;
+
+/** Save the name typed on the sign-up screen. */
+create or replace function public.set_my_name(p_name text)
+returns json language plpgsql security definer set search_path = public as $$
+begin
+  update public.members set name = left(trim(p_name), 80)
+   where id = auth.uid() and coalesce(trim(p_name), '') <> '';
+  return public.whoami();
+end $$;
+
+/** A manager starts a team and gets the two codes to share. */
+create or replace function public.create_team(p_team_name text, p_your_name text default '')
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  v_team   public.teams;
+  v_member public.members;
+begin
+  select * into v_member from public.members where id = auth.uid();
+  if not found then raise exception 'Verify your email first'; end if;
+  if v_member.team_id is not null then
+    raise exception 'You are already on a team. Leave it before starting another.';
+  end if;
+  if coalesce(trim(p_team_name), '') = '' then raise exception 'Give your team a name'; end if;
+
+  loop
+    begin
+      insert into public.teams (name, join_code, manager_code)
+      values (left(trim(p_team_name), 80), public.gen_code(6), public.gen_code(6))
+      returning * into v_team;
+      exit;
+    exception when unique_violation then
+      -- astronomically unlikely; draw again
+    end;
+  end loop;
+
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members
+     set team_id   = v_team.id,
+         role      = 'manager',
+         name      = coalesce(nullif(trim(p_your_name), ''), nullif(name, ''), split_part(email, '@', 1)),
+         job_title = coalesce(nullif(job_title, ''), 'Manager')
+   where id = auth.uid();
+  perform set_config('app.member_guard_bypass', '0', true);
+
+  insert into public.activity (team_id, actor_id, actor_name, type, detail)
+  values (v_team.id, v_member.id, public.my_name(), 'team.created', v_team.name);
+
+  return public.whoami();
+end $$;
+
+/** Join the team a manager shared a code for. */
+create or replace function public.join_team(p_code text, p_your_name text default '')
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  v_code   text := public.normalize_code(p_code);
+  v_team   public.teams;
+  v_role   text;
+  v_member public.members;
+begin
+  select * into v_member from public.members where id = auth.uid();
+  if not found then raise exception 'Verify your email first'; end if;
+  if v_member.team_id is not null then
+    raise exception 'You are already on a team.';
+  end if;
+
+  select * into v_team from public.teams
+   where join_code = v_code or manager_code = v_code;
+  if not found then
+    raise exception 'That team code does not match any team. Check it with your manager.'
+      using errcode = 'no_data_found';
+  end if;
+  v_role := case when v_team.manager_code = v_code then 'manager' else 'employee' end;
+
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members
+     set team_id = v_team.id,
+         role    = v_role,
+         name    = coalesce(nullif(trim(p_your_name), ''), nullif(name, ''), split_part(email, '@', 1))
+   where id = auth.uid();
+  perform set_config('app.member_guard_bypass', '0', true);
+
+  insert into public.activity (team_id, actor_id, actor_name, type, detail)
+  values (v_team.id, v_member.id, public.my_name(), 'member.joined', public.my_name());
+
+  return public.whoami();
+end $$;
+
+/** Step away from a team (a manager cannot strand it — hand over first). */
+create or replace function public.leave_team()
+returns json language plpgsql security definer set search_path = public as $$
+declare v_team uuid := public.my_team();
+begin
+  if v_team is null then return public.whoami(); end if;
+  if public.is_manager() and (
+       select count(*) from public.members
+        where team_id = v_team and role = 'manager' and status = 'active') <= 1 then
+    raise exception 'You are the only manager. Make someone else a manager first.';
+  end if;
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members set team_id = null, role = 'employee' where id = auth.uid();
+  perform set_config('app.member_guard_bypass', '0', true);
+  return public.whoami();
+end $$;
+
+/** Managers can print a fresh team code if the old one got out. */
+create or replace function public.rotate_team_code(p_which text default 'join')
+returns json language plpgsql security definer set search_path = public as $$
+declare v_team public.teams;
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+  if p_which = 'manager' then
+    update public.teams set manager_code = public.gen_code(6)
+     where id = public.my_team() returning * into v_team;
+  else
+    update public.teams set join_code = public.gen_code(6)
+     where id = public.my_team() returning * into v_team;
+  end if;
+  return row_to_json(v_team);
+end $$;
+
+create or replace function public.rename_team(p_name text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_team public.teams;
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+  update public.teams set name = left(trim(p_name), 80)
+   where id = public.my_team() and coalesce(trim(p_name), '') <> ''
+   returning * into v_team;
+  return row_to_json(v_team);
+end $$;
+
 -- =============================================================================
 --  TASK RULES (enforced in the database, not just the UI)
 -- =============================================================================
@@ -195,16 +356,16 @@ create trigger on_auth_user_created
 create or replace function public.tasks_before_insert()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  new.created_by := coalesce(new.created_by, auth.uid());
-  if not public.acts_as_admin() then
-    -- employees may only create work for themselves, and cannot self-verify
-    new.assigned_to := coalesce(new.assigned_to, auth.uid());
-    if new.assigned_to <> auth.uid() then
+  new.team_id    := coalesce(new.team_id, public.my_team());
+  new.created_by := coalesce(new.created_by, public.me());
+  if new.team_id is null then raise exception 'You are not on a team yet'; end if;
+
+  if not public.acts_as_manager() then
+    new.assigned_to := coalesce(new.assigned_to, public.me());
+    if new.assigned_to <> public.me() then
       raise exception 'Only a manager can assign work to someone else';
     end if;
-    if new.status in ('verified', 'rejected') then
-      new.status := 'open';
-    end if;
+    if new.status in ('verified', 'rejected') then new.status := 'open'; end if;
     new.review_note := '';
     new.reviewed_at := null;
     new.reviewed_by := null;
@@ -216,7 +377,6 @@ create or replace function public.tasks_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare v_photos integer;
 begin
-  -- a task can only be marked done once its photo proof is attached
   if new.status = 'submitted' and old.status is distinct from 'submitted' and new.requires_photo then
     select count(*) into v_photos from public.task_photos where task_id = new.id;
     if v_photos = 0 then
@@ -225,25 +385,24 @@ begin
     end if;
   end if;
 
-  if not public.acts_as_admin() then
-    -- managers own the review fields; employees cannot touch them
+  new.team_id := old.team_id;
+
+  if not public.acts_as_manager() then
     if new.status in ('verified', 'rejected') and old.status is distinct from new.status then
       raise exception 'Only a manager can review a task';
     end if;
-    new.review_note  := old.review_note;
-    new.reviewed_at  := old.reviewed_at;
-    new.reviewed_by  := old.reviewed_by;
+    new.review_note    := old.review_note;
+    new.reviewed_at    := old.reviewed_at;
+    new.reviewed_by    := old.reviewed_by;
     new.requires_photo := old.requires_photo;
-    new.created_by   := old.created_by;
+    new.created_by     := old.created_by;
     if old.assigned_to is not null and new.assigned_to is distinct from old.assigned_to then
       raise exception 'Only a manager can reassign a task';
     end if;
-    new.assigned_to := coalesce(new.assigned_to, auth.uid());
-  else
-    if new.status in ('verified', 'rejected') and old.status is distinct from new.status then
-      new.reviewed_at := now();
-      new.reviewed_by := auth.uid();
-    end if;
+    new.assigned_to := coalesce(new.assigned_to, public.me());
+  elsif new.status in ('verified', 'rejected') and old.status is distinct from new.status then
+    new.reviewed_at := now();
+    new.reviewed_by := public.me();
   end if;
 
   if new.status = 'in_progress' and old.status = 'open' then
@@ -267,6 +426,28 @@ drop trigger if exists tasks_before_update_trg on public.tasks;
 create trigger tasks_before_update_trg before update on public.tasks
   for each row execute function public.tasks_before_update();
 
+/** The join/create/leave RPCs set this for the length of their statement, so
+    the guard below doesn't undo the one update that puts you on a team. */
+create or replace function public.guard_bypassed()
+returns boolean language sql stable as $$
+  select coalesce(current_setting('app.member_guard_bypass', true), '') = '1';
+$$;
+
+create or replace function public.members_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if not (public.acts_as_manager() or public.guard_bypassed()) then
+    new.role    := old.role;
+    new.status  := old.status;
+    new.team_id := old.team_id;
+    new.email   := old.email;
+  end if;
+  return new;
+end $$;
+drop trigger if exists members_guard_trg on public.members;
+create trigger members_guard_trg before update on public.members
+  for each row execute function public.members_guard();
+
 -- Activity feed --------------------------------------------------------------
 
 create or replace function public.log_task_activity()
@@ -286,8 +467,8 @@ begin
     return new;
   end if;
 
-  insert into public.activity (task_id, actor_id, actor_name, type, detail)
-  values (new.id, auth.uid(), public.my_name(), v_type, new.title);
+  insert into public.activity (team_id, task_id, actor_id, actor_name, type, detail)
+  values (new.team_id, new.id, public.me(), public.my_name(), v_type, new.title);
   return new;
 end $$;
 
@@ -298,11 +479,10 @@ create trigger tasks_activity_trg after insert or update on public.tasks
 create or replace function public.log_photo_activity()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.activity (task_id, actor_id, actor_name, type, detail)
-  select new.task_id, auth.uid(), public.my_name(), 'photo.added', t.title
+  insert into public.activity (team_id, task_id, actor_id, actor_name, type, detail)
+  select t.team_id, new.task_id, public.me(), public.my_name(), 'photo.added', t.title
     from public.tasks t where t.id = new.task_id;
 
-  -- a photo means work has started
   update public.tasks
      set status = 'in_progress', started_at = coalesce(started_at, now())
    where id = new.task_id and status = 'open';
@@ -314,143 +494,130 @@ create trigger photos_activity_trg after insert on public.task_photos
   for each row execute function public.log_photo_activity();
 
 -- =============================================================================
---  ROW LEVEL SECURITY
+--  ROW LEVEL SECURITY — everything is scoped to your own team
 -- =============================================================================
 
-alter table public.profiles       enable row level security;
-alter table public.invites        enable row level security;
+alter table public.teams          enable row level security;
+alter table public.members        enable row level security;
 alter table public.tasks          enable row level security;
 alter table public.task_photos    enable row level security;
 alter table public.task_templates enable row level security;
 alter table public.activity       enable row level security;
 
--- profiles -------------------------------------------------------------------
-drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles for select to authenticated
-  using (id = auth.uid() or public.is_admin() or (public.is_active() and status = 'active'));
+-- teams: you can read your own team. Codes change only through the RPCs above.
+drop policy if exists teams_select on public.teams;
+create policy teams_select on public.teams for select to authenticated
+  using (id = public.my_team());
 
-drop policy if exists profiles_update_self on public.profiles;
-create policy profiles_update_self on public.profiles for update to authenticated
-  using (id = auth.uid()) with check (id = auth.uid());
+-- members
+drop policy if exists members_select on public.members;
+create policy members_select on public.members for select to authenticated
+  using (id = auth.uid() or (team_id is not null and team_id = public.my_team()));
 
-drop policy if exists profiles_admin_all on public.profiles;
-create policy profiles_admin_all on public.profiles for all to authenticated
-  using (public.is_admin()) with check (public.is_admin());
+drop policy if exists members_update_self on public.members;
+create policy members_update_self on public.members for update to authenticated
+  using (id = public.me()) with check (id = public.me());
 
--- Employees must not be able to promote themselves.
-create or replace function public.profiles_guard()
-returns trigger language plpgsql security definer set search_path = public as $$
-begin
-  if not public.acts_as_admin() then
-    new.role   := old.role;
-    new.status := old.status;
-    new.email  := old.email;
-  end if;
-  return new;
-end $$;
-drop trigger if exists profiles_guard_trg on public.profiles;
-create trigger profiles_guard_trg before update on public.profiles
-  for each row execute function public.profiles_guard();
+drop policy if exists members_manager on public.members;
+create policy members_manager on public.members for all to authenticated
+  using (public.is_manager() and team_id = public.my_team())
+  with check (public.is_manager() and team_id = public.my_team());
 
--- invites --------------------------------------------------------------------
-drop policy if exists invites_admin on public.invites;
-create policy invites_admin on public.invites for all to authenticated
-  using (public.is_admin()) with check (public.is_admin());
-
--- tasks ----------------------------------------------------------------------
+-- tasks
 drop policy if exists tasks_select on public.tasks;
 create policy tasks_select on public.tasks for select to authenticated
   using (
-    public.is_admin()
-    or (public.is_active() and (assigned_to = auth.uid() or assigned_to is null or created_by = auth.uid()))
+    team_id = public.my_team()
+    and (public.is_manager() or assigned_to = public.me() or assigned_to is null or created_by = public.me())
   );
 
 drop policy if exists tasks_insert on public.tasks;
 create policy tasks_insert on public.tasks for insert to authenticated
-  with check (public.is_admin() or public.is_active());
+  with check (team_id = public.my_team());
 
 drop policy if exists tasks_update on public.tasks;
 create policy tasks_update on public.tasks for update to authenticated
-  using (public.is_admin() or (public.is_active() and (assigned_to = auth.uid() or assigned_to is null)))
-  with check (public.is_admin() or (public.is_active() and (assigned_to = auth.uid() or assigned_to is null)));
+  using (team_id = public.my_team()
+         and (public.is_manager() or assigned_to = public.me() or assigned_to is null))
+  with check (team_id = public.my_team());
 
 drop policy if exists tasks_delete on public.tasks;
 create policy tasks_delete on public.tasks for delete to authenticated
-  using (public.is_admin() or (created_by = auth.uid() and status <> 'verified'));
+  using (team_id = public.my_team()
+         and (public.is_manager() or (created_by = public.me() and status <> 'verified')));
 
--- task_photos ----------------------------------------------------------------
+-- photos
 drop policy if exists photos_select on public.task_photos;
 create policy photos_select on public.task_photos for select to authenticated
-  using (
-    public.is_admin()
-    or exists (select 1 from public.tasks t
-                where t.id = task_id and (t.assigned_to = auth.uid() or t.created_by = auth.uid()))
-  );
+  using (exists (
+    select 1 from public.tasks t
+     where t.id = task_id and t.team_id = public.my_team()
+       and (public.is_manager() or t.assigned_to = public.me() or t.created_by = public.me())
+  ));
 
 drop policy if exists photos_insert on public.task_photos;
 create policy photos_insert on public.task_photos for insert to authenticated
   with check (
-    user_id = auth.uid() and (
-      public.is_admin()
-      or exists (select 1 from public.tasks t
-                  where t.id = task_id
-                    and t.status <> 'verified'
-                    and (t.assigned_to = auth.uid() or t.assigned_to is null))
+    member_id = public.me()
+    and exists (
+      select 1 from public.tasks t
+       where t.id = task_id and t.team_id = public.my_team()
+         and t.status <> 'verified'
+         and (public.is_manager() or t.assigned_to = public.me() or t.assigned_to is null)
     )
   );
 
 drop policy if exists photos_update on public.task_photos;
 create policy photos_update on public.task_photos for update to authenticated
-  using (public.is_admin() or user_id = auth.uid())
-  with check (public.is_admin() or user_id = auth.uid());
+  using (member_id = public.me() or public.is_manager())
+  with check (member_id = public.me() or public.is_manager());
 
 drop policy if exists photos_delete on public.task_photos;
 create policy photos_delete on public.task_photos for delete to authenticated
   using (
-    public.is_admin()
-    or (user_id = auth.uid()
-        and exists (select 1 from public.tasks t where t.id = task_id and t.status <> 'verified'))
+    exists (select 1 from public.tasks t where t.id = task_id and t.team_id = public.my_team())
+    and (public.is_manager()
+         or (member_id = public.me()
+             and exists (select 1 from public.tasks t where t.id = task_id and t.status <> 'verified')))
   );
 
--- task_templates -------------------------------------------------------------
+-- templates
 drop policy if exists templates_select on public.task_templates;
 create policy templates_select on public.task_templates for select to authenticated
-  using (public.is_active());
+  using (team_id = public.my_team());
 
-drop policy if exists templates_admin on public.task_templates;
-create policy templates_admin on public.task_templates for all to authenticated
-  using (public.is_admin()) with check (public.is_admin());
+drop policy if exists templates_manager on public.task_templates;
+create policy templates_manager on public.task_templates for all to authenticated
+  using (public.is_manager() and team_id = public.my_team())
+  with check (public.is_manager() and team_id = public.my_team());
 
--- activity -------------------------------------------------------------------
+-- activity
 drop policy if exists activity_select on public.activity;
 create policy activity_select on public.activity for select to authenticated
-  using (public.is_admin() or actor_id = auth.uid());
+  using (team_id = public.my_team() and (public.is_manager() or actor_id = public.me()));
 
 -- =============================================================================
 --  RPCs used by the app
 -- =============================================================================
 
--- Rolls today's recurring checklist out. Idempotent — safe to call on every load.
 create or replace function public.ensure_todays_tasks(p_date date default current_date)
 returns integer language plpgsql security definer set search_path = public as $$
-declare v_count integer := 0;
+declare v_count integer := 0; v_team uuid := public.my_team();
 begin
-  if not public.is_active() then
-    return 0;
-  end if;
+  if v_team is null then return 0; end if;
 
   with due as (
     select t.* from public.task_templates t
-     where t.active
+     where t.active and t.team_id = v_team
        and (
          t.recurrence = 'daily'
          or (t.recurrence = 'weekdays' and extract(isodow from p_date) between 1 and 5)
          or (t.recurrence = 'weekly' and extract(dow from p_date) = coalesce(t.weekday, 1))
        )
   ), inserted as (
-    insert into public.tasks (title, description, location, priority, requires_photo,
+    insert into public.tasks (team_id, title, description, location, priority, requires_photo,
                               assigned_to, created_by, work_date, due_date, template_id, status)
-    select d.title, d.description, d.location, d.priority, d.requires_photo,
+    select d.team_id, d.title, d.description, d.location, d.priority, d.requires_photo,
            d.assigned_to, d.created_by, p_date, p_date, d.id, 'open'
       from due d
      where not exists (
@@ -462,8 +629,6 @@ begin
   return v_count;
 end $$;
 
--- Marks a task done. The photo rule lives in the trigger, so this is safe to
--- call from the phone even if someone tampers with the client.
 create or replace function public.complete_task(
   p_task_id bigint,
   p_notes   text default '',
@@ -473,13 +638,14 @@ declare v_task public.tasks;
 begin
   select * into v_task from public.tasks where id = p_task_id;
   if not found then raise exception 'Task not found'; end if;
-  if not (public.is_admin() or (public.is_active() and (v_task.assigned_to = auth.uid() or v_task.assigned_to is null))) then
+  if v_task.team_id <> public.my_team() then raise exception 'That task belongs to another team'; end if;
+  if not (public.is_manager() or v_task.assigned_to = public.me() or v_task.assigned_to is null) then
     raise exception 'That task belongs to a teammate';
   end if;
 
   update public.tasks
      set status        = 'submitted',
-         assigned_to   = coalesce(assigned_to, auth.uid()),
+         assigned_to   = coalesce(assigned_to, public.me()),
          notes         = coalesce(nullif(p_notes, ''), notes),
          minutes_spent = coalesce(p_minutes, minutes_spent),
          review_note   = ''
@@ -489,30 +655,28 @@ begin
   return v_task;
 end $$;
 
--- Per-employee scoreboard for a single day.
 create or replace function public.employee_day_stats(p_date date default current_date)
 returns table (
-  id uuid, full_name text, email text, job_title text, last_seen_at timestamptz,
+  id uuid, name text, job_title text, last_seen_at timestamptz,
   assigned bigint, completed bigint, remaining bigint, awaiting_review bigint, photos bigint,
   last_completed_at timestamptz
 ) language sql stable security definer set search_path = public as $$
-  select p.id, p.full_name, p.email, p.job_title, p.last_seen_at,
-         count(t.id) filter (where t.id is not null)                                   as assigned,
-         count(t.id) filter (where t.status in ('submitted', 'verified'))              as completed,
-         count(t.id) filter (where t.status in ('open', 'in_progress', 'rejected'))    as remaining,
-         count(t.id) filter (where t.status = 'submitted')                             as awaiting_review,
+  select p.id, p.name, p.job_title, p.last_seen_at,
+         count(t.id) filter (where t.id is not null)                                as assigned,
+         count(t.id) filter (where t.status in ('submitted', 'verified'))           as completed,
+         count(t.id) filter (where t.status in ('open', 'in_progress', 'rejected')) as remaining,
+         count(t.id) filter (where t.status = 'submitted')                          as awaiting_review,
          (select count(*) from public.task_photos ph
             join public.tasks t2 on t2.id = ph.task_id
-           where ph.user_id = p.id and t2.work_date = p_date)                          as photos,
-         max(t.completed_at)                                                           as last_completed_at
-    from public.profiles p
+           where ph.member_id = p.id and t2.work_date = p_date)                     as photos,
+         max(t.completed_at)                                                        as last_completed_at
+    from public.members p
     left join public.tasks t on t.assigned_to = p.id and t.work_date = p_date
-   where p.status = 'active' and p.role = 'employee' and public.is_admin()
+   where p.status = 'active' and p.team_id = public.my_team() and public.is_manager()
    group by p.id
-   order by completed desc, p.full_name;
+   order by completed desc, p.name;
 $$;
 
--- Completed-vs-total per day, for the dashboard trend bars.
 create or replace function public.daily_trend(p_from date, p_to date)
 returns table (day date, total bigint, completed bigint)
 language sql stable security definer set search_path = public as $$
@@ -520,62 +684,73 @@ language sql stable security definer set search_path = public as $$
          count(t.id) as total,
          count(t.id) filter (where t.status in ('submitted', 'verified')) as completed
     from generate_series(p_from, p_to, interval '1 day') d
-    left join public.tasks t on t.work_date = d::date
-   where public.is_admin()
+    left join public.tasks t on t.work_date = d::date and t.team_id = public.my_team()
+   where public.is_manager()
    group by d
    order by d;
 $$;
 
--- Totals for a date range, optionally for one person.
-create or replace function public.range_stats(p_from date, p_to date, p_user uuid default null)
+create or replace function public.range_stats(p_from date, p_to date, p_member uuid default null)
 returns table (total bigint, open bigint, submitted bigint, verified bigint, rejected bigint,
                completed bigint, photos bigint)
 language sql stable security definer set search_path = public as $$
-  select count(*)                                                            as total,
-         count(*) filter (where status in ('open', 'in_progress'))           as open,
-         count(*) filter (where status = 'submitted')                        as submitted,
-         count(*) filter (where status = 'verified')                         as verified,
-         count(*) filter (where status = 'rejected')                         as rejected,
-         count(*) filter (where status in ('submitted', 'verified'))         as completed,
-         (select count(*) from public.task_photos ph join public.tasks t2 on t2.id = ph.task_id
-           where t2.work_date between p_from and p_to
-             and (p_user is null or t2.assigned_to = p_user)
-             and (public.is_admin() or t2.assigned_to = auth.uid()))         as photos
+  select count(*)                                                    as total,
+         count(*) filter (where status in ('open', 'in_progress'))   as open,
+         count(*) filter (where status = 'submitted')                as submitted,
+         count(*) filter (where status = 'verified')                 as verified,
+         count(*) filter (where status = 'rejected')                 as rejected,
+         count(*) filter (where status in ('submitted', 'verified')) as completed,
+         (select count(*) from public.task_photos ph
+            join public.tasks t2 on t2.id = ph.task_id
+           where t2.team_id = public.my_team()
+             and t2.work_date between p_from and p_to
+             and (p_member is null or t2.assigned_to = p_member)
+             and (public.is_manager() or t2.assigned_to = public.me()))  as photos
     from public.tasks t
-   where t.work_date between p_from and p_to
-     and (p_user is null or t.assigned_to = p_user)
-     and (public.is_admin() or t.assigned_to = auth.uid());
+   where t.team_id = public.my_team()
+     and t.work_date between p_from and p_to
+     and (p_member is null or t.assigned_to = p_member)
+     and (public.is_manager() or t.assigned_to = public.me());
 $$;
 
--- Heartbeat so the manager can see who is out working.
 create or replace function public.touch_last_seen()
 returns void language sql security definer set search_path = public as $$
-  update public.profiles set last_seen_at = now() where id = auth.uid();
+  update public.members set last_seen_at = now() where id = public.me();
 $$;
 
-grant execute on function public.acts_as_admin()                      to authenticated;
-grant execute on function public.ensure_todays_tasks(date)            to authenticated;
-grant execute on function public.complete_task(bigint, text, integer) to authenticated;
-grant execute on function public.employee_day_stats(date)             to authenticated;
-grant execute on function public.daily_trend(date, date)              to authenticated;
-grant execute on function public.range_stats(date, date, uuid)        to authenticated;
-grant execute on function public.touch_last_seen()                    to authenticated;
-
 -- =============================================================================
---  GRANTS
---  RLS decides what each row lets you do; these just open the doors.
+--  GRANTS — RLS decides what each row lets you do; these open the doors.
 -- =============================================================================
 
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on
-  public.profiles, public.tasks, public.task_photos, public.task_templates, public.invites
-  to authenticated;
-grant select on public.activity to authenticated;
+  public.tasks, public.task_photos, public.task_templates, public.members to authenticated;
+grant select on public.teams, public.activity to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 alter default privileges in schema public grant usage, select on sequences to authenticated;
 
+grant execute on function public.whoami()                              to authenticated;
+grant execute on function public.set_my_name(text)                     to authenticated;
+grant execute on function public.create_team(text, text)               to authenticated;
+grant execute on function public.join_team(text, text)                 to authenticated;
+grant execute on function public.leave_team()                          to authenticated;
+grant execute on function public.rotate_team_code(text)                to authenticated;
+grant execute on function public.rename_team(text)                     to authenticated;
+grant execute on function public.me()                                  to authenticated;
+grant execute on function public.my_team()                             to authenticated;
+grant execute on function public.is_manager()                          to authenticated;
+grant execute on function public.acts_as_manager()                     to authenticated;
+grant execute on function public.guard_bypassed()                      to authenticated;
+grant execute on function public.ensure_todays_tasks(date)             to authenticated;
+grant execute on function public.complete_task(bigint, text, integer)  to authenticated;
+grant execute on function public.employee_day_stats(date)              to authenticated;
+grant execute on function public.daily_trend(date, date)               to authenticated;
+grant execute on function public.range_stats(date, date, uuid)         to authenticated;
+grant execute on function public.touch_last_seen()                     to authenticated;
+
 -- =============================================================================
 --  STORAGE — private bucket for the photo proof
+--  Files live at  <member-id>/<task-id>/<file>
 -- =============================================================================
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -586,27 +761,37 @@ on conflict (id) do update
       file_size_limit = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
 
--- Files are stored as  <user-id>/<task-id>/<uuid>.jpg
 drop policy if exists task_photos_insert on storage.objects;
 create policy task_photos_insert on storage.objects for insert to authenticated
   with check (
     bucket_id = 'task-photos'
-    and public.is_active()
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = public.me()::text
   );
 
 drop policy if exists task_photos_select on storage.objects;
 create policy task_photos_select on storage.objects for select to authenticated
   using (
     bucket_id = 'task-photos'
-    and (public.is_admin() or (storage.foldername(name))[1] = auth.uid()::text)
+    and (
+      (storage.foldername(name))[1] = public.me()::text
+      or (public.is_manager() and exists (
+        select 1 from public.members m
+         where m.id::text = (storage.foldername(name))[1] and m.team_id = public.my_team()
+      ))
+    )
   );
 
 drop policy if exists task_photos_delete on storage.objects;
 create policy task_photos_delete on storage.objects for delete to authenticated
   using (
     bucket_id = 'task-photos'
-    and (public.is_admin() or (storage.foldername(name))[1] = auth.uid()::text)
+    and (
+      (storage.foldername(name))[1] = public.me()::text
+      or (public.is_manager() and exists (
+        select 1 from public.members m
+         where m.id::text = (storage.foldername(name))[1] and m.team_id = public.my_team()
+      ))
+    )
   );
 
 -- =============================================================================
@@ -614,16 +799,12 @@ create policy task_photos_delete on storage.objects for delete to authenticated
 -- =============================================================================
 do $$
 begin
-  if not exists (
-    select 1 from pg_publication_tables
-     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tasks'
-  ) then
+  if not exists (select 1 from pg_publication_tables
+                  where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tasks') then
     alter publication supabase_realtime add table public.tasks;
   end if;
-  if not exists (
-    select 1 from pg_publication_tables
-     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'activity'
-  ) then
+  if not exists (select 1 from pg_publication_tables
+                  where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'activity') then
     alter publication supabase_realtime add table public.activity;
   end if;
 end $$;

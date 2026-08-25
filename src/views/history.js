@@ -16,8 +16,8 @@ export async function historyView(container, params = {}) {
   const from = params.from || data.shiftDate(to, -13);
 
   const [tasks, stats] = await Promise.all([
-    data.listTasks({ from, to, assignedTo: state.profile.id }),
-    data.rangeStats(from, to, state.profile.id),
+    data.listTasks({ from, to, assignedTo: state.me.id }),
+    data.rangeStats(from, to, state.me.id),
   ]);
 
   shell.innerHTML = '';

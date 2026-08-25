@@ -31,7 +31,7 @@ export async function todayView(container) {
   }
 
   const refresh = () => todayView(container);
-  const mine = tasks.filter((t) => t.assigned_to === state.profile.id);
+  const mine = tasks.filter((t) => t.assigned_to === state.me.id);
   const upForGrabs = tasks.filter((t) => !t.assigned_to);
   const doneCount = mine.filter((t) => t.isDone).length;
   const todo = mine.filter((t) => ['open', 'in_progress', 'rejected'].includes(t.status));
@@ -39,7 +39,7 @@ export async function todayView(container) {
   const verified = mine.filter((t) => t.status === 'verified');
   const photos = mine.reduce((n, t) => n + (t.photos?.length || 0), 0);
 
-  const firstName = (state.profile.full_name || '').split(' ')[0] || 'there';
+  const firstName = (state.me.name || '').split(' ')[0] || 'there';
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 

@@ -24,7 +24,7 @@ export function taskCard(task, onOpen, { showAssignee = false } = {}) {
           ${task.location ? `<span class="chip">📍 ${esc(task.location)}</span>` : ''}
           ${task.requires_photo && !photos.length ? '<span class="chip info">📷 needs photo</span>' : ''}
           ${photos.length ? `<span class="chip">📷 ${photos.length}</span>` : ''}
-          ${showAssignee ? `<span class="chip">${esc(task.assignee?.full_name || 'Unassigned')}</span>` : ''}
+          ${showAssignee ? `<span class="chip">${esc(task.assignee?.name || 'Unassigned')}</span>` : ''}
         </span>
         ${photos.length ? `<span class="thumbs">${thumbs}${more}</span>` : ''}
       </span>
@@ -81,14 +81,14 @@ export function sectionHead(title, count, extra = '') {
   </div>`;
 }
 
-export function personRow(profile, { sub, right = '' } = {}) {
+export function personRow(person, { sub, right = '' } = {}) {
   return el(`
     <div class="list-row">
-      <span class="avatar sm">${esc(initials(profile.full_name || profile.email))}</span>
+      <span class="avatar sm">${esc(initials(person.name || person.email))}</span>
       <span class="grow">
         <span class="who" style="display:block">
-          <span class="name" style="display:block">${esc(profile.full_name || profile.email)}</span>
-          <span class="sub" style="display:block">${esc(sub ?? profile.email)}</span>
+          <span class="name" style="display:block">${esc(person.name || person.email)}</span>
+          <span class="sub" style="display:block">${esc(sub ?? person.email)}</span>
         </span>
       </span>
       ${right}

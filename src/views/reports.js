@@ -76,7 +76,7 @@ export async function reportsView(container, params = {}) {
     for (const p of people) {
       table.appendChild(el(`
         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
-          <span style="flex:1;font-size:14px;font-weight:600">${esc(p.full_name || p.email)}</span>
+          <span style="flex:1;font-size:14px;font-weight:600">${esc(p.name || p.email)}</span>
           <span class="chip ok">${p.completed} done</span>
           <span class="chip">${p.photos} 📷</span>
         </div>`));
@@ -110,7 +110,7 @@ function downloadCsv(tasks, from, to) {
   };
   const rows = tasks.map((t) => [
     t.id, t.work_date, t.title, t.location, t.status, t.priority,
-    t.assignee?.full_name || '', t.assignee?.email || '',
+    t.assignee?.name || '', t.assignee?.email || '',
     t.photos?.length || 0, t.notes, t.review_note, t.minutes_spent ?? '',
     t.started_at || '', t.completed_at || '', t.reviewed_at || '',
   ].map(cell).join(','));

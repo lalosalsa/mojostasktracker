@@ -22,33 +22,45 @@ storage) and **Vercel** (hosts the app). Budget about 20 minutes.
 That one file creates every table, the security rules, the photo bucket, and the
 automatic daily-checklist logic. It's safe to re-run later if you pull updates.
 
-## 3. Turn the sign-in email into a 6-digit code
+## 3. Make Supabase send codes instead of links
 
-By default Supabase emails a magic *link*. A link opens in the phone's browser
-instead of the installed app, so this app asks for a **code** instead — you just
-have to tell Supabase to include one.
+**This is the step that trips everyone up.** Supabase sends a magic *link* by
+default, and a link opens the phone's browser instead of the installed app. The
+app asks for a 6-digit code — you just have to put the code in the email.
+
+The catch: **Supabase uses two different templates**, and you need `{{ .Token }}`
+in *both*, or new sign-ups still get a link.
+
+| Who gets it | Template to edit |
+|---|---|
+| Someone signing up for the first time | **Confirm signup** |
+| Someone signing back in later | **Magic Link** |
 
 1. **Authentication** → **Emails** (older projects: *Email Templates*).
-2. Select the **Magic Link** template.
-3. Make sure the body contains `{{ .Token }}`. For example:
+2. Open **Confirm signup**, and replace the body with:
 
    ```html
-   <h2>Your sign-in code</h2>
-   <p>Enter this code in the app:</p>
-   <h1 style="letter-spacing:8px">{{ .Token }}</h1>
-   <p>It expires in 60 minutes. If you didn't ask to sign in, ignore this email.</p>
+   <h2>Your code</h2>
+   <p>Enter this in the app to finish signing up:</p>
+   <h1 style="letter-spacing:8px;font-family:monospace">{{ .Token }}</h1>
+   <p>It expires in 60 minutes. If you didn't ask for it, ignore this email.</p>
    ```
 
-4. Save.
+3. Open **Magic Link** and use the same body (change the wording to "Enter this
+   in the app to sign in" if you like).
+4. Save both.
 
-Also check **Authentication → Sign In / Providers → Email** is enabled. Leave
-"Allow new users to sign up" **on** — new people land in a waiting room with no
-access until you approve them, which is how your crew gets added.
+Then check **Authentication → Sign In / Providers → Email** is enabled, and leave
+**Allow new users to sign up** on — that's how your crew creates their accounts.
+Getting into *your* team still requires the team code from step 8.
+
+> Already sent yourself a link email while testing? Fix the templates, then
+> request a new code — old emails keep the old format.
 
 ## 4. Set up real email sending (do this before your crew uses it)
 
 Supabase's built-in email service is for testing and is rate limited to a
-**handful of messages per hour** — with a crew signing in, that runs out fast and
+**handful of messages per hour** — with a crew signing up, that runs out fast and
 people get locked out.
 
 1. Create a free account with an email provider — [Resend](https://resend.com),
@@ -59,7 +71,7 @@ people get locked out.
 3. While you're there, raise **Rate Limits → Emails per hour** to something that
    fits your crew size.
 
-Skip this and sign-in emails will start failing once a few people try at once.
+Skip this and the codes will stop arriving once a few people sign up at once.
 
 ## 5. Copy your keys
 
@@ -122,22 +134,31 @@ Back in Supabase: **Authentication** → **URL Configuration**.
 - **Site URL**: `https://your-app.vercel.app`
 - **Redirect URLs**: add `https://your-app.vercel.app/**`
 
-## 8. Claim the manager account
+## 8. Create your team
 
-Open your Vercel URL and sign in with **your own email** first.
+Open your Vercel URL and tap **Create an account**. Enter your name and email,
+type the 6-digit code from your inbox, then choose **Create a new team** and name
+your business.
 
-**The first person to sign in becomes the manager.** Do this before anyone else
-touches the link.
+You're the manager. The app shows you a **6-character crew code** — that's what
+your crew types to join. You can see it again any time under **Team**.
 
-## 9. Add your crew
+## 9. Get your crew in
 
-1. Go to the **Team** tab → **Add a team member** → enter their work email.
-2. Send them the app link.
-3. They enter that email, type the code from their inbox, and they're in.
+Send them the app link. Each person taps **Create an account**, enters their
+name and email, types their emailed code, then chooses **I have a team code** and
+types your crew code.
 
-Anyone who signs in *without* being added first waits in a holding screen until
-you approve them from the Team tab — so the link is safe to share in a group
-chat.
+That's it — they're on your team and can start logging work.
+
+Two things worth knowing:
+
+- **Team** → **Share** copies a ready-made invite (link + code) you can paste
+  into a group text.
+- There's a separate **manager code** under Team, for anyone who should also
+  see everyone's work and sign off on photos. Only share that one deliberately.
+- If a code gets out, **New code** issues a fresh one. People already on the
+  team stay on it.
 
 ## 10. Get it onto their phones
 
@@ -178,22 +199,32 @@ and Vercel stays free for this kind of site.
 
 ## Troubleshooting
 
-**"That code expired" / no email arrives.** You're likely hitting the built-in
-email rate limit — do step 4. Also check the spam folder.
+**The email has a link, not a code.** Both templates need `{{ .Token }}` — see
+step 3. The *Confirm signup* template is the one people forget, so first-time
+sign-ups keep getting links.
 
-**Someone is stuck on "Almost there".** They signed up before you added them.
-Approve them in **Team**.
+**No email arrives at all.** You're likely hitting the built-in email rate limit
+— do step 4. Also check spam.
 
-**A photo won't upload.** The bucket comes from the SQL in step 2. Check
-**Storage** shows a private bucket named `task-photos`; if not, re-run the file.
+**"That team code does not match any team."** Codes are 6 characters and skip
+easily-confused letters (no O, I or L — those are zero, one and one). Read it
+off the Team screen and re-send it.
 
-**"Your account does not have permission for that."** That's row-level security
-doing its job — the person is either pending or trying to touch someone else's
-task.
+**Someone joined the wrong team.** They can leave from **Me → Leave team**, then
+join again with the right code.
 
-**I signed in first but I'm not the manager.** Someone beat you to it. In
-Supabase, **Table Editor** → `profiles`, set your row's `role` to `admin` and
-`status` to `active`.
+**Screens error out right after signing in.** The database tables aren't there —
+run `supabase/schema.sql` (step 2).
+
+**A photo won't upload.** Check **Storage** shows a private bucket named
+`task-photos`; if not, re-run the schema.
+
+**"Your account does not have permission for that."** Row-level security doing
+its job — that person is on a different team, or their access was turned off.
+
+**I ran an older version of this schema.** Run `supabase/reset.sql` once, then
+`supabase/schema.sql`. That clears the old tables — only do it while you have no
+real data.
 
 **The app looks stale after a deploy.** Fully close it and reopen; the service
 worker picks up the new version on next launch.

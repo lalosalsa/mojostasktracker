@@ -21,36 +21,52 @@ function unwrap({ data, error }) {
 }
 
 const TASK_FIELDS = `
-  id, title, description, location, status, priority, requires_photo,
+  id, team_id, title, description, location, status, priority, requires_photo,
   work_date, due_date, notes, review_note, minutes_spent, template_id,
   created_at, started_at, completed_at, reviewed_at,
   assigned_to, created_by, reviewed_by,
-  assignee:profiles!tasks_assigned_to_fkey (id, full_name, email),
-  reviewer:profiles!tasks_reviewed_by_fkey (id, full_name),
-  photos:task_photos (id, storage_path, thumb_path, caption, latitude, longitude, created_at, user_id)
+  assignee:members!tasks_assigned_to_fkey (id, name),
+  reviewer:members!tasks_reviewed_by_fkey (id, name),
+  photos:task_photos (id, storage_path, thumb_path, caption, latitude, longitude, created_at, member_id)
 `;
 
-/* ------------------------------------------------------------------ profile */
-export async function loadProfile(userId) {
-  const { data, error } = await sb().from('profiles').select('*').eq('id', userId).maybeSingle();
-  if (error) throw new Error(friendlyError(error));
-  return data;
+/* ----------------------------------------------------- who am I / my team */
+
+/** { member, team } for the signed-in device, or null before sign-up finishes. */
+export async function whoami() {
+  const data = unwrap(await sb().rpc('whoami'));
+  return data || null;
 }
 
-export async function waitForProfile(userId, tries = 6) {
-  // The signup trigger writes the profile; on a brand-new account it can lag
-  // the first session by a few hundred milliseconds.
+/** The signup trigger writes the member row; on a brand-new account it can lag
+    the first session by a few hundred milliseconds. */
+export async function waitForMe(tries = 6) {
   for (let i = 0; i < tries; i += 1) {
-    const profile = await loadProfile(userId);
-    if (profile) return profile;
+    const identity = await whoami();
+    if (identity?.member) return identity;
     await new Promise((r) => setTimeout(r, 300 + i * 250));
   }
   return null;
 }
 
+export const setMyName = (name) => sb().rpc('set_my_name', { p_name: name }).then(unwrap);
+
+export const createTeam = (teamName, yourName) =>
+  sb().rpc('create_team', { p_team_name: teamName, p_your_name: yourName || '' }).then(unwrap);
+
+export const joinTeam = (code, yourName) =>
+  sb().rpc('join_team', { p_code: code, p_your_name: yourName || '' }).then(unwrap);
+
+export const leaveTeam = () => sb().rpc('leave_team').then(unwrap);
+
+export const rotateTeamCode = (which = 'join') =>
+  sb().rpc('rotate_team_code', { p_which: which }).then(unwrap);
+
+export const renameTeam = (name) => sb().rpc('rename_team', { p_name: name }).then(unwrap);
+
 export async function updateMyProfile(patch) {
   const { data: { user } } = await sb().auth.getUser();
-  return unwrap(await sb().from('profiles').update(patch).eq('id', user.id).select().single());
+  return unwrap(await sb().from('members').update(patch).eq('id', user.id).select().single());
 }
 
 export const touchLastSeen = () => sb().rpc('touch_last_seen').then(() => {}, () => {});
@@ -200,7 +216,7 @@ export async function uploadPhoto(task, { photo, thumb, width, height, caption =
     return unwrap(
       await sb().from('task_photos').insert({
         task_id: task.id,
-        user_id: user.id,
+        member_id: user.id,
         storage_path: mainPath,
         thumb_path: thumbPath,
         mime: contentType,
@@ -231,49 +247,32 @@ export const updatePhotoCaption = (id, caption) =>
 
 /* --------------------------------------------------------------------- team */
 export const listTeam = async () =>
-  unwrap(await sb().from('profiles').select('*').order('status').order('full_name')) || [];
+  unwrap(await sb().from('members').select('*').order('status').order('name')) || [];
 
 export const listActiveEmployees = async () =>
   unwrap(
-    await sb().from('profiles').select('id, full_name, email, job_title')
-      .eq('status', 'active').order('full_name')
+    await sb().from('members').select('id, name, email, job_title')
+      .eq('status', 'active').order('name')
   ) || [];
 
 export const updateMember = (id, patch) =>
-  sb().from('profiles').update(patch).eq('id', id).select().single().then(unwrap);
+  sb().from('members').update(patch).eq('id', id).select().single().then(unwrap);
 
-export const removeMember = (id) => sb().from('profiles').delete().eq('id', id).then(unwrap);
-
-export const listInvites = async () =>
-  unwrap(await sb().from('invites').select('*').order('created_at', { ascending: false })) || [];
-
-export async function inviteMember({ email, fullName = '', jobTitle = '', role = 'employee' }) {
-  const { data: { user } } = await sb().auth.getUser();
-  return unwrap(
-    await sb().from('invites').upsert({
-      email: email.trim().toLowerCase(),
-      full_name: fullName,
-      job_title: jobTitle,
-      role,
-      invited_by: user.id,
-    }).select().single()
-  );
-}
-
-export const cancelInvite = (email) => sb().from('invites').delete().eq('email', email).then(unwrap);
+export const removeMember = (id) => sb().from('members').delete().eq('id', id).then(unwrap);
 
 /* ---------------------------------------------------------------- templates */
 export const listTemplates = async () =>
   unwrap(
     await sb().from('task_templates')
-      .select('*, assignee:profiles!task_templates_assigned_to_fkey (id, full_name)')
+      .select('*, assignee:members!task_templates_assigned_to_fkey (id, name)')
       .order('active', { ascending: false }).order('title')
   ) || [];
 
-export async function createTemplate(fields) {
+export async function createTemplate(fields, teamId) {
   const { data: { user } } = await sb().auth.getUser();
   return unwrap(
     await sb().from('task_templates').insert({
+      team_id: teamId,
       title: fields.title,
       description: fields.description || '',
       location: fields.location || '',
@@ -300,12 +299,12 @@ export const dailyTrend = async (from, to) =>
   unwrap(await sb().rpc('daily_trend', { p_from: from, p_to: to })) || [];
 
 export async function rangeStats(from, to, userId = null) {
-  const rows = unwrap(await sb().rpc('range_stats', { p_from: from, p_to: to, p_user: userId }));
+  const rows = unwrap(await sb().rpc('range_stats', { p_from: from, p_to: to, p_member: userId }));
   return rows?.[0] || { total: 0, open: 0, submitted: 0, verified: 0, rejected: 0, completed: 0, photos: 0 };
 }
 
 export const listActivity = async (limit = 40) =>
   unwrap(await sb().from('activity').select('*').order('id', { ascending: false }).limit(limit)) || [];
 
-export const pendingMembers = async () =>
-  unwrap(await sb().from('profiles').select('*').eq('status', 'pending').order('created_at')) || [];
+export const teamMemberCount = async () =>
+  (unwrap(await sb().from('members').select('id').eq('status', 'active')) || []).length;

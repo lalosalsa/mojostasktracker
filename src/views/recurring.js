@@ -2,6 +2,7 @@
 
 import { el, esc, toast, busy, sheet, confirmSheet } from '../ui.js';
 import * as data from '../data.js';
+import { state } from '../store.js';
 import { emptyState, skeletonList, sectionHead } from './components.js';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -41,7 +42,7 @@ export async function recurringView(container) {
         <div class="list-row" style="cursor:pointer">
           <span class="grow">
             <span style="font-weight:650;display:block">${esc(t.title)}</span>
-            <span class="small muted">${esc(describe(t))} · ${esc(t.assignee?.full_name || 'anyone on the crew')}${t.requires_photo ? ' · 📷 photo required' : ''}</span>
+            <span class="small muted">${esc(describe(t))} · ${esc(t.assignee?.name || 'anyone on the crew')}${t.requires_photo ? ' · 📷 photo required' : ''}</span>
           </span>
           <span class="icon-btn">›</span>
         </div>`);
@@ -93,7 +94,7 @@ function openTemplateEditor(existing, employees, onDone) {
           <label for="r-who">Assign to</label>
           <select class="select" id="r-who">
             <option value="">Anyone on the crew</option>
-            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === t.assigned_to ? 'selected' : ''}>${esc(e.full_name || e.email)}</option>`).join('')}
+            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === t.assigned_to ? 'selected' : ''}>${esc(e.name || e.email)}</option>`).join('')}
           </select>
         </div>
         <div class="field">
@@ -159,7 +160,7 @@ function openTemplateEditor(existing, employees, onDone) {
           active: body.querySelector('#r-active')?.checked ?? true,
         });
       } else {
-        await data.createTemplate(fields);
+        await data.createTemplate(fields, state.team?.id);
       }
       await data.ensureTodaysTasks();
       s.close();

@@ -17,6 +17,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# a previous run may still be holding the port
+pg_ctl -D "$PGDATA" stop -m immediate >/dev/null 2>&1 || true
+pkill -f "postgres.*-p ${PORT}" >/dev/null 2>&1 || true
+sleep 1
+
 rm -rf "$PGDATA"; mkdir -p "$PGDATA" "$SOCK"
 if id postgres >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   chown -R postgres "$PGDATA" "$SOCK"; chmod 700 "$PGDATA"

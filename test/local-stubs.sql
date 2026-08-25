@@ -1,5 +1,5 @@
 -- Minimal stand-ins for the parts of Supabase that live outside our schema,
--- so the app schema can be validated locally.
+-- so the app schema can be validated on a plain local Postgres.
 create schema if not exists auth;
 create schema if not exists storage;
 do $$ begin

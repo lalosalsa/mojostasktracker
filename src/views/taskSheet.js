@@ -4,15 +4,15 @@ import { el, esc, sheet, toast, busy, confirmSheet, fmtDate, fmtTime, timeAgo,
          STATUS_LABELS, STATUS_CHIP, PRIORITY_CHIP } from '../ui.js';
 import { photoGrid } from '../photos.js';
 import * as data from '../data.js';
-import { isAdmin, state } from '../store.js';
+import { isManager, state } from '../store.js';
 
 export function statusChip(task) {
   return `<span class="chip ${STATUS_CHIP[task.status] || ''}">${esc(STATUS_LABELS[task.status] || task.status)}</span>`;
 }
 
 export function openTaskSheet(task, { onChange } = {}) {
-  const admin = isAdmin();
-  const mine = task.assigned_to === state.profile?.id || task.assigned_to == null;
+  const admin = isManager();
+  const mine = task.assigned_to === state.me?.id || task.assigned_to == null;
   const editable = (admin || mine) && task.status !== 'verified';
 
   const body = el('<div></div>');
@@ -37,7 +37,7 @@ export function openTaskSheet(task, { onChange } = {}) {
         <div class="meta" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${meta}</div>
         ${task.description ? `<p class="mt small" style="color:var(--ink-2);line-height:1.55;white-space:pre-wrap">${esc(task.description)}</p>` : ''}
         <p class="small muted mt">
-          ${task.assignee ? `Assigned to ${esc(task.assignee.full_name || task.assignee.email)}` : 'Unassigned — anyone can pick this up'}
+          ${task.assignee ? `Assigned to ${esc(task.assignee.name || task.assignee.email)}` : 'Unassigned — anyone can pick this up'}
         </p>
       </div>`));
 
@@ -52,7 +52,7 @@ export function openTaskSheet(task, { onChange } = {}) {
       body.appendChild(el(`
         <div class="banner ok mt">
           <span class="ic">✓</span>
-          <div><strong>Signed off${task.reviewer ? ` by ${esc(task.reviewer.full_name)}` : ''}</strong>
+          <div><strong>Signed off${task.reviewer ? ` by ${esc(task.reviewer.name)}` : ''}</strong>
           ${task.review_note ? `<br>${esc(task.review_note)}` : ''}</div>
         </div>`));
     }

@@ -4,18 +4,18 @@ import './ui.js';
 import { el, esc, toast, initials } from './ui.js';
 import { isConfigured, APP_NAME, BUILD_ID } from './config.js';
 import { sb, friendlyError } from './supabase.js';
-import { state, setState, subscribe, isAdmin } from './store.js';
+import { state, setState, subscribe, isManager } from './store.js';
 import { route, setNotFound, startRouter, navigate, parse, resolve } from './router.js';
 import * as data from './data.js';
 
-import { setupView, signInView, pendingView, disabledView, errorView } from './views/auth.js';
+import { setupView, signInView, teamSetupView, disabledView, errorView } from './views/auth.js';
 import { todayView, openLogSheet } from './views/today.js';
 import { historyView } from './views/history.js';
 import { meView } from './views/me.js';
 import { dashboardView } from './views/dashboard.js';
 import { reviewView } from './views/review.js';
 import { teamView, } from './views/team.js';
-import { tasksAdminView, openTaskEditor } from './views/tasksAdmin.js';
+import { taskBoardView, openTaskEditor } from './views/tasksBoard.js';
 import { recurringView } from './views/recurring.js';
 import { reportsView } from './views/reports.js';
 
@@ -43,20 +43,20 @@ const TABS = {
 };
 
 function buildShell() {
-  const admin = isAdmin();
+  const admin = isManager();
   const tabs = admin ? TABS.admin : TABS.employee;
 
   const node = el(`
     <div class="app">
       <header class="appbar">
         <div style="min-width:0">
-          <h1 data-title>${esc(APP_NAME)}</h1>
+          <h1 data-title>${esc(state.team?.name || APP_NAME)}</h1>
           <div class="sub" data-sub></div>
         </div>
         <span class="spacer"></span>
         <button class="appbar-btn" data-refresh title="Refresh">⟳</button>
         <button class="appbar-btn" data-profile title="Your account">
-          ${esc(initials(state.profile?.full_name || state.profile?.email))}
+          ${esc(initials(state.me?.name || state.me?.email))}
         </button>
       </header>
       <div class="offline-bar" hidden data-offline>Offline — changes will need a connection to save</div>
@@ -94,18 +94,18 @@ function paintChrome() {
     '/recurring': 'Recurring tasks',
     '/reports': 'Reports',
   };
-  shell.querySelector('[data-title]').textContent = titles[path] || APP_NAME;
-  const name = state.profile?.full_name || state.profile?.email || '';
+  shell.querySelector('[data-title]').textContent = titles[path] || state.team?.name || APP_NAME;
+  const name = state.me?.name || state.me?.email || '';
   shell.querySelector('[data-sub]').textContent =
-    isAdmin() ? `${name} · Manager` : name;
+    isManager() ? `${name} · Manager` : `${name}${state.team ? ` · ${state.team.name}` : ''}`;
   shell.querySelector('[data-offline]').hidden = state.online;
 }
 
 /* ------------------------------------------------------------------ routes */
-function guarded(view, { adminOnly = false } = {}) {
+function guarded(view, { managersOnly = false } = {}) {
   return async (params) => {
-    if (!state.profile) return;
-    if (adminOnly && !isAdmin()) return navigate('/today', { replace: true });
+    if (!state.me || !state.me.team_id) return;
+    if (managersOnly && !isManager()) return navigate('/today', { replace: true });
     const container = shell?.querySelector('#view');
     if (!container) return;
     paintChrome();
@@ -133,18 +133,18 @@ function registerRoutes() {
     openLogSheet(() => resolve());
   }));
 
-  route('/dashboard', guarded(dashboardView, { adminOnly: true }));
-  route('/review', guarded(reviewView, { adminOnly: true }));
-  route('/tasks', guarded(tasksAdminView, { adminOnly: true }));
-  route('/team', guarded(teamView, { adminOnly: true }));
-  route('/recurring', guarded(recurringView, { adminOnly: true }));
-  route('/reports', guarded(reportsView, { adminOnly: true }));
+  route('/dashboard', guarded(dashboardView, { managersOnly: true }));
+  route('/review', guarded(reviewView, { managersOnly: true }));
+  route('/tasks', guarded(taskBoardView, { managersOnly: true }));
+  route('/team', guarded(teamView, { managersOnly: true }));
+  route('/recurring', guarded(recurringView, { managersOnly: true }));
+  route('/reports', guarded(reportsView, { managersOnly: true }));
   route('/new-task', guarded(async (container) => {
-    await tasksAdminView(container, {});
+    await taskBoardView(container, {});
     openTaskEditor(null, () => resolve());
-  }, { adminOnly: true }));
+  }, { managersOnly: true }));
 
-  setNotFound(() => navigate(isAdmin() ? '/dashboard' : '/today', { replace: true }));
+  setNotFound(() => navigate(isManager() ? '/dashboard' : '/today', { replace: true }));
 }
 
 /* ---------------------------------------------------------------- realtime */
@@ -171,25 +171,37 @@ async function onSignedIn(session) {
   setState({ session });
   if (mountedUserId === session.user.id && shell) return;   // token refresh, not a new sign-in
 
-  let profile;
+  let identity;
   try {
-    profile = await data.waitForProfile(session.user.id);
+    identity = await data.waitForMe();
   } catch (err) {
     return errorView(root(), friendlyError(err), () => location.reload());
   }
 
-  if (!profile) {
+  if (!identity?.member) {
     return errorView(
       root(),
-      'Your account was created but the profile row is missing. Re-run the setup SQL in Supabase, then try again.',
+      'Your account was created but its record is missing. Re-run the setup SQL in Supabase, then try again.',
       () => location.reload()
     );
   }
-  setState({ profile });
+  setState({ me: identity.member, team: identity.team });
 
-  if (profile.status === 'pending') return pendingView(root(), profile);
-  if (profile.status === 'disabled') return disabledView(root());
+  if (identity.member.status === 'disabled') return disabledView(root());
 
+  // Signed up but not on a team yet: create one or join with a code.
+  if (!identity.member.team_id) {
+    mountedUserId = null;
+    return teamSetupView(root(), identity.member, (joined) => {
+      setState({ me: joined.member, team: joined.team });
+      mountShell(session);
+    });
+  }
+
+  mountShell(session);
+}
+
+async function mountShell(session) {
   shell = buildShell();
   mountedUserId = session.user.id;
   registerRoutes();
@@ -197,7 +209,7 @@ async function onSignedIn(session) {
   data.touchLastSeen();
 
   const { path } = parse();
-  const home = isAdmin() ? '/dashboard' : '/today';
+  const home = isManager() ? '/dashboard' : '/today';
   if (!path || path === '/') navigate(home, { replace: true });
   await startRouter();
   paintChrome();
@@ -206,7 +218,7 @@ async function onSignedIn(session) {
 function onSignedOut() {
   realtimeChannel?.unsubscribe();
   realtimeChannel = null;
-  setState({ session: null, profile: null });
+  setState({ session: null, me: null, team: null });
   shell = null;
   mountedUserId = null;
   signInView(root());
@@ -231,7 +243,7 @@ async function boot() {
       return;
     }
     setState({ session });
-    if (!shell && !['pending', 'disabled'].includes(state.profile?.status)) onSignedIn(session);
+    if (!shell && !['pending', 'disabled'].includes(state.me?.status)) onSignedIn(session);
   });
 
   const { data: { session }, error } = await client.auth.getSession();
@@ -254,9 +266,9 @@ window.addEventListener('appinstalled', () => {
 });
 
 // Keep "last seen" fresh while the app is open, so managers see who's working.
-setInterval(() => { if (state.profile?.status === 'active') data.touchLastSeen(); }, 5 * 60_000);
+setInterval(() => { if (shell && state.me?.status === 'active') data.touchLastSeen(); }, 5 * 60_000);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.profile?.status === 'active') resolve();
+  if (!document.hidden && shell && state.me?.status === 'active') resolve();
 });
 
 subscribe(paintChrome);
