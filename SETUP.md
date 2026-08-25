@@ -214,6 +214,28 @@ database and 1 GB of file storage — photos are compressed to a few hundred KB
 each, so that's thousands of them. If you outgrow it, Supabase Pro is $25/month
 and Vercel stays free for this kind of site.
 
+## Something's wrong — start here
+
+Run **`supabase/diagnose.sql`** in the SQL Editor. It changes nothing, works even
+if the project is empty, and prints one table telling you what's set up and
+what isn't:
+
+```
+ item                  | result                              | verdict
+-----------------------+-------------------------------------+---------
+ schema version        | 2026.08.25-a                        | ok
+ tables present        | 9 of 9                              | ok
+ functions present     | 15 of 15                            | ok
+ logins vs app records | 4 logins, 4 accounts, 4 memberships | ok
+ photo bucket          | private bucket exists               | ok
+ photo storage rules   | 4 of 4                              | ok
+ row level security    | on for every table                  | ok
+```
+
+Anything not "ok" tells you the fix. The **schema version** should match the
+**app version** shown at the bottom of the **Me** screen — if they differ, one
+side is stale: re-run `supabase/schema.sql`, or redeploy on Vercel.
+
 ## Troubleshooting
 
 **"Email confirmation is still switched on."** Do step 3 — Authentication →

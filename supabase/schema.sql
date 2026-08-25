@@ -24,6 +24,13 @@
 
 create extension if not exists "pgcrypto";
 
+-- Which version of this file has been applied. supabase/diagnose.sql reads it.
+create table if not exists public.schema_meta (
+  id         integer primary key default 1 check (id = 1),
+  version    text not null,
+  applied_at timestamptz not null default now()
+);
+
 -- =============================================================================
 --  TABLES
 -- =============================================================================
@@ -1134,3 +1141,12 @@ begin
     alter publication supabase_realtime add table public.activity;
   end if;
 end $$;
+
+-- =============================================================================
+--  Record that this file ran, and how far it got.
+-- =============================================================================
+insert into public.schema_meta (id, version, applied_at)
+values (1, '2026.08.25-a', now())
+on conflict (id) do update set version = excluded.version, applied_at = now();
+
+grant select on public.schema_meta to authenticated;

@@ -39,5 +39,9 @@ export const isConfigured = () => {
   return Boolean(c.url && c.anonKey);
 };
 
+/** Bump when shipping something you'll want to identify in the wild. The build
+    hash below it changes every build; this is the number to quote in support. */
+export const APP_VERSION = '2026.08.25-a';
+
 export const APP_NAME = typeof __APP_NAME__ === 'string' && __APP_NAME__ ? __APP_NAME__ : 'Task Tracker';
 export const PHOTO_BUCKET = 'task-photos';

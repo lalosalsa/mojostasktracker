@@ -5,7 +5,7 @@ import * as data from '../data.js';
 import { state, isManager, setState } from '../store.js';
 import { openTeamSwitcher } from './teamSwitcher.js';
 import { sb } from '../supabase.js';
-import { clearSupabaseConfig, getSupabaseConfig, APP_NAME, BUILD_ID } from '../config.js';
+import { clearSupabaseConfig, getSupabaseConfig, APP_NAME, APP_VERSION, BUILD_ID } from '../config.js';
 import { navigate } from '../router.js';
 
 export async function meView(container) {
@@ -137,7 +137,7 @@ export async function meView(container) {
 
   const cfg = getSupabaseConfig();
   const version = el(`
-    <p class="small muted center mt-lg">${esc(APP_NAME)} · version ${esc(BUILD_ID)}<br>
+    <p class="small muted center mt-lg">${esc(APP_NAME)} · app ${esc(APP_VERSION)} (${esc(BUILD_ID)})<br>
     connected to ${esc(new URL(cfg.url).hostname)}</p>`);
   container.appendChild(version);
 
