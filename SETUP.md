@@ -91,6 +91,30 @@ what actually protect the data.
 > Changing an environment variable later? Redeploy afterwards — the values are
 > baked in at build time.
 
+### Used the Vercel ↔ Supabase connector instead?
+
+That's fine — it adds the environment variables for you (`SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, and friends), and the build accepts any of
+those names automatically. Two things to know:
+
+**Redeploy after connecting.** The keys are baked into the app at build time, so
+a deployment that ran *before* you connected Supabase has no connection in it —
+it will open a "Connect your database" screen instead of the sign-in screen. In
+Vercel: **Deployments** → the latest one → **⋯** → **Redeploy**.
+
+**Check the build log to confirm.** Open the deployment's build log and look for:
+
+```
+Supabase: https://xxxxxxxx.supabase.co (from SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY)
+```
+
+If instead it prints "Supabase connection NOT baked into this build", the log
+lists exactly what's missing or wrong.
+
+**The connector does not do steps 2, 3, 4 or 7.** It wires up credentials and
+nothing else — you still have to run the schema SQL, put `{{ .Token }}` in the
+Magic Link email, set up SMTP, and set the redirect URLs below.
+
 ## 7. Point Supabase at your live URL
 
 Back in Supabase: **Authentication** → **URL Configuration**.

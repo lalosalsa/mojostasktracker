@@ -17,18 +17,59 @@ const SRC = path.join(ROOT, 'src');
 const OUT = path.join(ROOT, 'public');
 const watch = process.argv.includes('--watch');
 
+/** Returns [value, nameItCameFrom] for the first variable that is actually set. */
 const env = (...names) => {
-  for (const n of names) if (process.env[n]) return process.env[n].trim();
-  return '';
+  for (const n of names) {
+    const value = (process.env[n] || '').trim();
+    if (value) return [value, n];
+  }
+  return ['', ''];
 };
 
-const SUPABASE_URL = env('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'PUBLIC_SUPABASE_URL').replace(/\/+$/, '');
-const APP_NAME = env('APP_NAME') || "Mojo's Task Tracker";
-const APP_SHORT_NAME = env('APP_SHORT_NAME') || 'Tasks';
-const SUPABASE_ANON_KEY = env(
-  'SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'VITE_SUPABASE_ANON_KEY',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'PUBLIC_SUPABASE_ANON_KEY'
+// Vercel's Supabase integration injects several of these; a hand-typed .env
+// usually has the bare names. Accept whichever showed up.
+const [rawUrl, urlFrom] = env(
+  'SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'VITE_SUPABASE_URL',
+  'PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_URL'
 );
+const [SUPABASE_ANON_KEY, keyFrom] = env(
+  'SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'SUPABASE_PUBLISHABLE_DEFAULT_KEY', 'VITE_SUPABASE_ANON_KEY',
+  'PUBLIC_SUPABASE_ANON_KEY', 'EXPO_PUBLIC_SUPABASE_ANON_KEY'
+);
+const SUPABASE_URL = rawUrl.replace(/\/+$/, '');
+const [APP_NAME_ENV] = env('APP_NAME');
+const [APP_SHORT_ENV] = env('APP_SHORT_NAME');
+const APP_NAME = APP_NAME_ENV || "Mojo's Task Tracker";
+const APP_SHORT_NAME = APP_SHORT_ENV || 'Tasks';
+
+/** Says out loud what the build found, so a Vercel log answers "did it pick up
+    my Supabase connection?" without anyone having to guess. */
+function reportConfig() {
+  const problems = [];
+  if (!SUPABASE_URL) problems.push('no Supabase URL variable is set');
+  else if (!/^https:\/\/[^/]+\.supabase\.(co|in|red)/.test(SUPABASE_URL)) {
+    problems.push(`SUPABASE_URL does not look like a project URL: ${SUPABASE_URL.slice(0, 40)}` +
+      (SUPABASE_URL.startsWith('postgres') ? ' (that is the database connection string, not the API URL)' : ''));
+  }
+  if (!SUPABASE_ANON_KEY) problems.push('no Supabase anon/publishable key variable is set');
+  else if (SUPABASE_ANON_KEY.length < 30) problems.push('the Supabase key looks too short to be real');
+  else if (/service_role/.test(SUPABASE_ANON_KEY) || SUPABASE_ANON_KEY.startsWith('sb_secret_')) {
+    problems.push('that is the SERVICE ROLE key — use the anon / publishable key, never the secret one');
+  }
+
+  if (!problems.length) {
+    console.log(`  Supabase: ${SUPABASE_URL} (from ${urlFrom} + ${keyFrom})`);
+    return;
+  }
+  console.log('  ────────────────────────────────────────────────────────────');
+  console.log('  Supabase connection NOT baked into this build:');
+  for (const p of problems) console.log(`    · ${p}`);
+  console.log('    The app will open a setup screen asking for the URL and key.');
+  console.log('    Fix: set SUPABASE_URL and SUPABASE_ANON_KEY in Vercel, then redeploy.');
+  console.log('  ────────────────────────────────────────────────────────────');
+}
 
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
@@ -99,9 +140,7 @@ async function build() {
 
   const size = (fs.statSync(path.join(OUT, 'assets', bundleName)).size / 1024).toFixed(0);
   console.log(`  built public/ in ${Date.now() - started}ms — assets/${bundleName} (${size} kB)`);
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.log('  note: SUPABASE_URL / SUPABASE_ANON_KEY not set — the app will ask for them on first run.');
-  }
+  reportConfig();
 }
 
 build().catch((err) => {
