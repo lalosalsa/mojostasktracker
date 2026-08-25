@@ -57,21 +57,61 @@ Getting into *your* team still requires the team code from step 8.
 > Already sent yourself a link email while testing? Fix the templates, then
 > request a new code — old emails keep the old format.
 
-## 4. Set up real email sending (do this before your crew uses it)
+## 4. Set up real email sending — required, not optional
 
-Supabase's built-in email service is for testing and is rate limited to a
-**handful of messages per hour** — with a crew signing up, that runs out fast and
-people get locked out.
+Supabase's built-in email sender is a **testing-only** service capped at roughly
+**2 emails per hour, for the whole project**. Two sign-ins and everyone else is
+locked out with "too many sign-in emails went out". You need your own sender
+before the crew touches this.
 
-1. Create a free account with an email provider — [Resend](https://resend.com),
-   SendGrid, Postmark or similar — and get SMTP credentials.
-2. In Supabase: **Project Settings** → **Authentication** → **SMTP Settings** →
-   enable custom SMTP and paste the host, port, username, password and a sender
-   address you own.
-3. While you're there, raise **Rate Limits → Emails per hour** to something that
-   fits your crew size.
+Pick whichever is easier for you:
 
-Skip this and the codes will stop arriving once a few people sign up at once.
+### Option A — Gmail (fastest, no domain needed)
+
+Good for a small crew. Google allows ~500 messages a day, far more than you'll use.
+
+1. Your Google account needs **2-Step Verification** turned on
+   ([myaccount.google.com/security](https://myaccount.google.com/security)).
+2. Create an **App Password**:
+   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   → name it "Task Tracker" → copy the 16-character password.
+3. In Supabase → **Project Settings** → **Authentication** → **SMTP Settings** →
+   turn on **Enable Custom SMTP** and enter:
+
+   | Field | Value |
+   |---|---|
+   | Host | `smtp.gmail.com` |
+   | Port | `587` |
+   | Username | your full Gmail address |
+   | Password | the 16-character app password (no spaces) |
+   | Sender email | the same Gmail address |
+   | Sender name | your business name |
+
+### Option B — a proper email service (better deliverability)
+
+[Resend](https://resend.com), [Brevo](https://brevo.com) or SendGrid all have
+free tiers. Resend and Mailgun want you to own a domain; Brevo and SendGrid let
+you verify a single sender address instead. Create the account, get the SMTP
+host / port / username / password, and paste them into the same Supabase screen.
+
+### Then raise the limit
+
+**Authentication** → **Rate Limits** → **Rate limit for sending emails** — the
+built-in cap of 2/hour only lifts once custom SMTP is on. Set it to something
+comfortable, like 30 per hour.
+
+### Testing without sending anything
+
+While you're setting up, you can skip email entirely: **Authentication** →
+**Sign In / Providers** → **Email** → find **Test OTP** and add a mapping like
+
+```
+you@example.com:123456
+```
+
+That email will now accept `123456` as its code, and no message is sent. Handy
+for trying the app on your own phone. **Remove it before real use** — anyone who
+knows that address could sign in as them.
 
 ## 5. Copy your keys
 
@@ -203,8 +243,10 @@ and Vercel stays free for this kind of site.
 step 3. The *Confirm signup* template is the one people forget, so first-time
 sign-ups keep getting links.
 
-**No email arrives at all.** You're likely hitting the built-in email rate limit
-— do step 4. Also check spam.
+**"Too many sign-in emails went out" / no email arrives.** The built-in Supabase
+sender allows about 2 emails per hour for the entire project. Set up your own
+SMTP (step 4) and raise the rate limit. To keep testing right now, either wait
+an hour or add a Test OTP as described in step 4.
 
 **"That team code does not match any team."** Codes are 6 characters and skip
 easily-confused letters (no O, I or L — those are zero, one and one). Read it
