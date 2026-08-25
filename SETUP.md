@@ -248,7 +248,7 @@ what isn't:
 ```
  item                  | result                              | verdict
 -----------------------+-------------------------------------+---------
- schema version        | 2026.08.25-d                        | ok
+ schema version        | 2026.08.25-e                        | ok
  tables present        | 9 of 9                              | ok
  functions present     | 15 of 15                            | ok
  logins vs app records | 4 logins, 4 accounts, 4 memberships | ok
@@ -343,13 +343,20 @@ either way. If it never goes live, check **Database → Replication** (or
 Publications) in Supabase includes the `supabase_realtime` publication — the
 schema adds the tables to it, and prints a notice if it wasn't allowed to.
 
-**The screen flickers or redraws constantly.** Fixed in `2026.08.25-d`. Live
+**The screen blinks every few seconds.** Fixed in `2026.08.25-e`. When the app
+brought itself up to date in the background it redrew the screen the same way it
+does when you first open it: clear it, show the loading bars, then paint. That
+is a blink, once per update. A background repaint is now built off-screen and
+swapped in whole — no empty gap, no jump back to the top — and it holds off
+entirely while a sheet is open or you are typing. No database change needed.
+
+**The screen flickers many times a second.** Fixed in `2026.08.25-d`. Live
 updates used to redraw whenever anything about a teammate changed — including
 the "still here" ping the app sends while it is open, which every open screen
 sent, which redrew every open screen. Now a teammate simply being online is
 ignored, and a repaint can never come round more than once every three seconds
 whatever fires it. Deploy the latest build; no database change is needed for
-this one.
+this one either.
 
 **The app looks stale after a deploy.** Fully close it and reopen; the service
 worker picks up the new version on next launch.

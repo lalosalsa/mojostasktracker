@@ -139,10 +139,24 @@ function guarded(view, { managersOnly = false } = {}) {
   return async (params) => {
     if (!state.me || !state.me.team_id) return;
     if (managersOnly && !isManager()) return navigate('/today', { replace: true });
-    const container = shell?.querySelector('#view');
-    if (!container) return;
+    const live = shell?.querySelector('#view');
+    if (!live) return;
     paintChrome();
-    window.scrollTo({ top: 0 });
+
+    /* A screen clears itself, shows its loading bars and paints again as its
+       data lands. That is right when you asked for the screen — and it is a
+       blink when the app is only keeping itself up to date in the background.
+       So a background repaint is built off-screen and swapped in whole: one
+       frame, no empty gap, and the page stays where you left it. */
+    const quiet = state.quietRefresh;
+    let container = live;
+    if (quiet) {
+      container = document.createElement('div');
+      container.id = 'view';
+      container.className = live.className;
+    } else {
+      window.scrollTo({ top: 0 });
+    }
 
     // Views fetch before they paint, so tapping two tabs quickly can let the
     // slower first one finish last and paint over the screen you asked for.
@@ -150,11 +164,16 @@ function guarded(view, { managersOnly = false } = {}) {
     try {
       await view(container, params);
       if (parse().path !== startedAt) return resolve();   // repaint what's current
+      if (quiet) {
+        const y = window.scrollY;
+        live.replaceWith(container);        // the finished screen, in one go
+        if (window.scrollY !== y) window.scrollTo({ top: y });   // stay where you were
+      }
     } catch (err) {
       // A background repaint that fails — a dropped signal, a request cancelled
       // by navigation — must not throw a banner over what someone is reading.
       // Leave the screen as it is; the next poll will bring it up to date.
-      if (state.quietRefresh) return;
+      if (quiet) return;
       console.error(err);
       container.innerHTML = '';
       container.appendChild(el(`
@@ -187,10 +206,19 @@ function registerRoutes() {
 
 /* ---------------------------------------------------------------- live sync */
 
-/** Repaints the current screen without the loading skeletons flashing. */
+/* Repainting under someone's hands is worse than being a few seconds behind:
+   it closes what they opened and loses what they typed. */
+function midConversation() {
+  if (document.querySelector('.sheet, .modal')) return true;
+  const focused = document.activeElement;
+  return !!focused && ['INPUT', 'TEXTAREA', 'SELECT'].includes(focused.tagName);
+}
+
+/** Repaints the current screen without the loading bars flashing. */
 function liveRefresh({ quiet = true } = {}) {
   const { path } = parse();
   if (!shell || !path || path === '/') return;
+  if (quiet && midConversation()) return;
   if (quiet) setState({ quietRefresh: true });
   return Promise.resolve(resolve()).finally(() => setState({ quietRefresh: false }));
 }

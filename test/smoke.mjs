@@ -497,6 +497,50 @@ await page.waitForTimeout(2500);
 check('a teammate simply being online does not redraw the screen',
   taskFetches === quietStart, `${taskFetches - quietStart} refetches from heartbeats alone`);
 
+/* The screen must not empty itself while it catches up. Watch the list of tasks
+   for the whole of a background repaint: if it ever goes to nothing — loading
+   bars, or a blank — that is the blink. */
+await page.evaluate(() => { location.hash = '#/today'; });
+await page.waitForSelector('.task', { timeout: 5000 });
+await page.waitForTimeout(600);
+await page.evaluate(() => {
+  window.__SAW_EMPTY__ = false;
+  window.__SCROLLED_TO_TOP__ = false;
+  const realScrollTo = window.scrollTo.bind(window);
+  window.scrollTo = (opts) => {
+    if (opts && opts.top === 0) window.__SCROLLED_TO_TOP__ = true;
+    return realScrollTo(opts);
+  };
+  new MutationObserver(() => {
+    const view = document.querySelector('#view');
+    if (view && !view.querySelector('.task')) window.__SAW_EMPTY__ = true;
+  }).observe(document.body, { childList: true, subtree: true });
+  window.__LIVE_EMIT__({ table: 'tasks', eventType: 'UPDATE', old: { id: 1 }, new: { id: 1, status: 'open' } });
+});
+await page.waitForTimeout(3000);
+const blink = await page.evaluate(() => ({
+  empty: window.__SAW_EMPTY__, jumped: window.__SCROLLED_TO_TOP__,
+}));
+check('a background repaint never empties the screen', !blink.empty);
+check('and never yanks you back to the top', !blink.jumped);
+
+// A sheet open on screen is someone mid-task. Leave them alone until they close
+// it — a repaint under their hands loses whatever they were doing.
+const beforeSheet = taskFetches;
+await page.locator('.task').first().click();
+await page.waitForSelector('.sheet', { timeout: 5000 });
+const openedWith = taskFetches;
+await page.evaluate(() => {
+  window.__LIVE_EMIT__({ table: 'tasks', eventType: 'UPDATE', old: { id: 3 }, new: { id: 3, status: 'open' } });
+});
+await page.waitForTimeout(3000);
+check('nothing repaints while a task sheet is open',
+  taskFetches === openedWith && (await page.locator('.sheet').count()) === 1,
+  `${taskFetches - openedWith} refetches while the sheet was open`);
+void beforeSheet;
+await page.click('.sheet-head [data-close]');
+await page.waitForTimeout(400);
+
 // A busy crew ticking tasks off one after another must not turn into a repaint
 // per tick. These arrive a second apart, far enough not to be simply debounced,
 // so only the floor between repaints keeps the screen still.

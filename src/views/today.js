@@ -19,6 +19,9 @@ export async function todayView(container) {
   try {
     tasks = data.sortTasks(await data.listTasks({ date: today }));
   } catch (err) {
+    // A background repaint that fails must not put an error where the list was;
+    // hand it up to be thrown away, and the next one will bring us up to date.
+    if (state.quietRefresh) throw err;
     shell.innerHTML = '';
     shell.appendChild(emptyState('⚠️', 'Could not load your tasks', err.message));
     return;
