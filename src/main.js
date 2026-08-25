@@ -277,9 +277,30 @@ document.addEventListener('visibilitychange', () => {
 
 subscribe(paintChrome);
 
+/* Keeping the installed app up to date.
+   A home-screen app can sit on a cached shell for days, so a deploy looks like
+   nothing happened. Reload as soon as a new service worker takes over, and go
+   looking for one whenever the app is reopened. */
 if ('serviceWorker' in navigator) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;   // first install: nothing to replace
+    reloading = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(`/sw.js?v=${BUILD_ID}`).catch(() => {});
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .then((registration) => {
+        registration.update().catch(() => {});
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) registration.update().catch(() => {});
+        });
+        setInterval(() => registration.update().catch(() => {}), 30 * 60_000);
+      })
+      .catch(() => {});
   });
 }
 
