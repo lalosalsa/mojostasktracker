@@ -1,6 +1,6 @@
 /* The location switcher that lives next to the profile icon. */
 
-import { el, esc, toast, busy, sheet, initials } from '../ui.js';
+import { el, esc, toast, busy, sheet, confirmSheet, initials } from '../ui.js';
 import * as data from '../data.js';
 import { state, setState, canCreateTeam } from '../store.js';
 import { friendlyError } from '../supabase.js';
@@ -57,6 +57,43 @@ export function openTeamSwitcher({ onSwitched } = {}) {
   const join = el('<button class="btn ghost block mt">Join a team with a code</button>');
   join.onclick = () => { s.close(); openJoinSheet(onSwitched); };
   body.appendChild(join);
+
+  if (state.team) {
+    const leave = el(`<button class="btn link block mt" style="color:var(--danger)">
+      Leave ${esc(state.team.name)}</button>`);
+    leave.onclick = async () => {
+      const yes = await confirmSheet({
+        title: `Leave ${state.team.name}?`,
+        message: 'You stop seeing its list. The work you already finished stays in '
+          + "the manager's records. You can rejoin later with the team code.",
+        confirmLabel: 'Leave',
+        danger: true,
+      });
+      if (!yes) return;
+      busy(leave);
+      try {
+        const identity = await data.leaveTeam();
+        setState({
+          account: identity.account,
+          me: identity.member,
+          team: identity.team,
+          teams: identity.teams || [],
+        });
+        s.close();
+        if (identity.team) {
+          toast(`Now at ${identity.team.name}`, 'ok');
+          onSwitched?.();
+        } else {
+          toast('You have left the team');
+          location.reload();          // back to the join-or-create screen
+        }
+      } catch (err) {
+        toast(friendlyError(err), 'error');
+        busy(leave, false);
+      }
+    };
+    body.appendChild(leave);
+  }
 
   body.appendChild(el(`
     <p class="small muted center mt">Each location keeps its own crew, blocks and history.</p>`));

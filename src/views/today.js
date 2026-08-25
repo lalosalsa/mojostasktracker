@@ -3,7 +3,7 @@
 import { el, esc, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { state } from '../store.js';
-import { taskCard, progressRing, statTile, emptyState, skeletonList, sectionHead, blockHeading } from './components.js';
+import { taskCard, progressRing, statTile, emptyState, skeletonList, blockHeading } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 
 export async function todayView(container) {

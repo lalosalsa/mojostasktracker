@@ -3,7 +3,7 @@
 import { el, esc, toast, busy, sheet, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { navigate } from '../router.js';
-import { taskCard, emptyState, skeletonList, sectionHead, statTile, blockHeading, weekStrip } from './components.js';
+import { taskCard, emptyState, skeletonList, statTile, blockHeading, weekStrip } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 
 export async function taskBoardView(container, params = {}) {

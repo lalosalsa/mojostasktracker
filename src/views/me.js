@@ -7,7 +7,6 @@ import { openTeamSwitcher } from './teamSwitcher.js';
 import { sb } from '../supabase.js';
 import { clearSupabaseConfig, getSupabaseConfig, APP_NAME, BUILD_ID } from '../config.js';
 import { navigate } from '../router.js';
-import { codeCard } from './team.js';
 
 export async function meView(container) {
   container.innerHTML = '';

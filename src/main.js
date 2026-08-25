@@ -2,7 +2,7 @@
 
 import './ui.js';
 import { el, esc, toast, initials } from './ui.js';
-import { isConfigured, APP_NAME, BUILD_ID } from './config.js';
+import { isConfigured, APP_NAME } from './config.js';
 import { sb, friendlyError } from './supabase.js';
 import { state, setState, subscribe, isManager, canCreateTeam } from './store.js';
 import { route, setNotFound, startRouter, navigate, parse, resolve } from './router.js';
@@ -131,8 +131,13 @@ function guarded(view, { managersOnly = false } = {}) {
     if (!container) return;
     paintChrome();
     window.scrollTo({ top: 0 });
+
+    // Views fetch before they paint, so tapping two tabs quickly can let the
+    // slower first one finish last and paint over the screen you asked for.
+    const startedAt = parse().path;
     try {
       await view(container, params);
+      if (parse().path !== startedAt) return resolve();   // repaint what's current
     } catch (err) {
       console.error(err);
       container.innerHTML = '';

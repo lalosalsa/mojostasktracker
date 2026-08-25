@@ -106,6 +106,8 @@ const context = await browser.newContext({
 
 let addedItem = null;
 let switchedTo = null;
+let verifiedTask = null;
+let rejectedNote = null;
 let identity = 'manager';
 let hasTeam = true;
 let createdTeamName = '';
@@ -217,6 +219,12 @@ await context.route(`${SUPA}/**`, async (route) => {
     return json(route, { Key: `task-photos/${uploadedPath}` });
   }
   if (url.includes('/rest/v1/tasks')) {
+    if (method === 'PATCH') {
+      const patch = JSON.parse(route.request().postData() || '{}');
+      if (patch.status === 'verified') verifiedTask = patch;
+      if (patch.status === 'rejected') rejectedNote = patch.review_note;
+      return json(route, { ...tasks[0], ...patch });
+    }
     if (url.includes('status=eq.submitted')) return json(route, tasks.filter((t) => t.status === 'submitted'));
     return json(route, tasks);
   }
@@ -362,6 +370,28 @@ check('photo proof thumbnails actually load',
   }));
 await page.screenshot({ path: 'test/shots/06-review.png', fullPage: true });
 
+// actually sign the work off — the manager's most-used button
+await page.locator('.card button', { hasText: 'Verify' }).first().click();
+for (let i = 0; i < 40 && !verifiedTask; i += 1) await page.waitForTimeout(100);
+check('verifying a task sends the sign-off', verifiedTask?.status === 'verified');
+
+await page.evaluate(() => { location.hash = '#/review'; });
+await page.waitForSelector('.card', { timeout: 5000 });
+await page.locator('.card button', { hasText: 'Send back' }).first().click();
+await page.waitForSelector('.sheet textarea', { timeout: 5000 });
+await page.fill('.sheet textarea', 'Missed the corners');
+await page.locator('.sheet-foot button', { hasText: 'Send' }).click();
+for (let i = 0; i < 40 && !rejectedNote; i += 1) await page.waitForTimeout(100);
+check('sending a task back carries the manager\'s note',
+  rejectedNote === 'Missed the corners', rejectedNote);
+await page.waitForTimeout(600);   // let the review list settle before moving on
+
+// tapping two screens quickly must land on the second one, not the first
+await page.evaluate(() => { location.hash = '#/team'; location.hash = '#/tasks'; });
+await page.waitForTimeout(1500);
+check('fast navigation lands on the screen you asked for',
+  (await page.locator('#view').innerText()).includes('last 7 days'));
+
 await page.evaluate(() => { location.hash = '#/tasks'; });
 await page.waitForSelector('.task', { timeout: 5000 });
 check('task board renders task cards', (await page.locator('.task').count()) >= 2);
@@ -416,6 +446,7 @@ check('the current one is marked', sheetText.includes('Here now'));
 check('each shows your role and crew size', sheetText.includes('Manager') && sheetText.includes('3 people'));
 check('a manager can add another location', sheetText.includes('Add another location'));
 check('and can join one with a code', sheetText.includes('Join a team with a code'));
+check('and can leave the one they are in', sheetText.includes('Leave Mojo Downtown'));
 
 const bar = await page.evaluate(() => {
   const btn = document.querySelector('[data-teams]');

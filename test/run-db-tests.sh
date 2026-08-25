@@ -51,3 +51,11 @@ $PSQL -c "create database blocks;" >/dev/null
 $PSQL -d blocks -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d blocks -f "$HERE/../supabase/schema.sql" >/dev/null
 psql -h "$SOCK" -p "$PORT" -U postgres -d blocks -f "$HERE/blocks-test.sql"
+
+echo
+echo "=== write paths ==="
+$PSQL -c "drop database if exists writes;" >/dev/null
+$PSQL -c "create database writes;" >/dev/null
+$PSQL -d writes -f "$HERE/local-stubs.sql" >/dev/null
+$PSQL -d writes -f "$HERE/../supabase/schema.sql" >/dev/null
+psql -h "$SOCK" -p "$PORT" -U postgres -d writes -f "$HERE/writes-test.sql"
