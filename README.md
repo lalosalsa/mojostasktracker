@@ -37,10 +37,10 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
   many are done in each.
 - Nothing is pre-assigned: pick up whatever needs doing. Finishing a task puts
   your name on it, so the manager can see who did what.
+- The crew's screen is only the manager's list — there's nothing else to learn.
 - Open a task → take photos → add notes → mark it done.
 - A task that requires a photo *cannot* be marked done without one. That rule is
   enforced in the database, not just in the app.
-- Log ad-hoc work that wasn't assigned ("Log a task"), photos and all.
 - History of everything they've completed, day by day.
 
 **For the manager**

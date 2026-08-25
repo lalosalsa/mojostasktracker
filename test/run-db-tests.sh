@@ -13,6 +13,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export PATH="$PGBIN:$PATH"
 
 cleanup() {
+  [ -n "${KEEP_RUNNING:-}" ] && return 0     # KEEP_RUNNING=1 leaves the cluster up for poking at
   pg_ctl -D "$PGDATA" stop -m immediate >/dev/null 2>&1 || true
 }
 trap cleanup EXIT

@@ -231,6 +231,28 @@ export async function deleteTask(id) {
 }
 
 /* ------------------------------------------------------------------- photos */
+
+/** Storage failures have their own causes, and "no permission" is rarely the
+    user's fault — it usually means the bucket or its policies are missing. */
+function storageError(error) {
+  const message = String(error?.message || error);
+  if (/row-level security|not authorized|Unauthorized|403/i.test(message)) {
+    return 'The photo could not be saved: this Supabase project is missing the '
+      + 'task-photos storage rules. A manager needs to re-run supabase/schema.sql, '
+      + 'or add the policies under Storage → Policies (see SETUP.md).';
+  }
+  if (/Bucket not found|not found/i.test(message)) {
+    return 'The photo could not be saved: there is no "task-photos" bucket in this '
+      + 'Supabase project yet. A manager needs to run supabase/schema.sql.';
+  }
+  if (/mime|content type/i.test(message)) {
+    return "That file type isn't allowed. Take the photo with the camera button instead.";
+  }
+  if (/exceeded the maximum|too large|Payload/i.test(message)) {
+    return 'That photo is too big even after shrinking. Try taking it again.';
+  }
+  return friendlyError(error);
+}
 const urlCache = new Map();   // storagePath -> { url, expires }
 const SIGNED_TTL = 3600;
 
@@ -266,7 +288,7 @@ export async function uploadPhoto(task, { photo, thumb, width, height, caption =
 
   const mainPath = `${base}.${ext}`;
   const up = await sb().storage.from(PHOTO_BUCKET).upload(mainPath, photo, { contentType, upsert: false });
-  if (up.error) throw new Error(friendlyError(up.error));
+  if (up.error) throw new Error(storageError(up.error));
 
   let thumbPath = null;
   if (thumb) {

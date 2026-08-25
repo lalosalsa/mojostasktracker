@@ -1,21 +1,16 @@
 /* Employee home: everything on the crew member's plate for the day. */
 
-import { el, esc, sheet, toast, busy, fmtDate } from '../ui.js';
+import { el, esc, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { state } from '../store.js';
 import { taskCard, progressRing, statTile, emptyState, skeletonList, sectionHead, blockHeading } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
-import { pickPhotos, uploadFiles } from '../photos.js';
 
 export async function todayView(container) {
   container.innerHTML = '';
   const shell = el('<div></div>');
   shell.appendChild(skeletonList(4));
   container.appendChild(shell);
-
-  const fab = el('<button class="fab">＋ Log a task</button>');
-  fab.onclick = () => openLogSheet(() => todayView(container));
-  container.appendChild(fab);
 
   const today = data.todayStr();
   await data.ensureTodaysTasks(today);
@@ -81,82 +76,7 @@ export async function todayView(container) {
   if (!tasks.length) {
     shell.appendChild(
       emptyState('🎉', 'Nothing on the list yet',
-        "When your manager sets up the day's blocks they show up here. You can also log work you finished with the button below.")
+        "When your manager sets up the day's blocks, the list shows up here.")
     );
   }
-}
-
-/** Quick "I did this" flow: name it, snap the proof, done. */
-export function openLogSheet(onDone) {
-  const body = el(`
-    <div>
-      <div class="field">
-        <label for="log-title">What did you do?</label>
-        <input class="input" id="log-title" placeholder="e.g. Replaced filters in unit 3" maxlength="160" autocomplete="off">
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="log-location">Where</label>
-          <input class="input" id="log-location" placeholder="Site / room" maxlength="120" autocomplete="off">
-        </div>
-        <div class="field">
-          <label for="log-minutes">Minutes</label>
-          <input class="input" id="log-minutes" type="number" min="0" max="1440" inputmode="numeric" placeholder="30">
-        </div>
-      </div>
-      <div class="field">
-        <label for="log-notes">Notes (optional)</label>
-        <textarea class="textarea" id="log-notes" placeholder="Anything your manager should know"></textarea>
-      </div>
-      <div class="banner info">
-        <span class="ic">📷</span>
-        <div>Next you'll take the photos that prove the work is finished.</div>
-      </div>
-    </div>`);
-
-  const foot = el(`<div style="display:flex;gap:10px;width:100%">
-    <button class="btn ghost" style="flex:1" data-close>Cancel</button>
-    <button class="btn" style="flex:2" data-go>📷 Add photos</button>
-  </div>`);
-
-  const s = sheet({ title: 'Log a finished task', body, footer: foot });
-  setTimeout(() => body.querySelector('#log-title').focus(), 90);
-
-  foot.querySelector('[data-go]').onclick = async (e) => {
-    const btn = e.currentTarget;
-    const title = body.querySelector('#log-title').value.trim();
-    if (!title) {
-      toast('Give the task a name first', 'error');
-      body.querySelector('#log-title').focus();
-      return;
-    }
-    busy(btn);
-    try {
-      const task = await data.createTask({
-        title,
-        location: body.querySelector('#log-location').value.trim(),
-        description: body.querySelector('#log-notes').value.trim(),
-        status: 'in_progress',
-        requiresPhoto: true,
-      });
-      const minutes = Number(body.querySelector('#log-minutes').value) || null;
-      if (minutes) await data.updateTask(task.id, { minutes_spent: minutes });
-      s.close();
-
-      const files = await pickPhotos({ camera: true });
-      if (files.length) {
-        toast('Uploading photos…');
-        const added = await uploadFiles(task, files);
-        task.photos = added;
-        task.photoCount = added.length;
-      }
-      const fresh = await data.getTask(task.id);
-      openTaskSheet(fresh, { onChange: onDone });
-      onDone?.();
-    } catch (err) {
-      toast(err.message, 'error');
-      busy(btn, false);
-    }
-  };
-  return s;
 }

@@ -388,7 +388,8 @@ check('crew member lands on Today',
 check('crew sees only three tabs (no manager tools)',
   (await page.locator('[data-tab]').count()) === 3);
 check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test(await page.locator('.hero').innerText()));
-check('shows a "log a task" button', await page.locator('.fab').isVisible());
+check('the crew just works the manager\'s list (no ad-hoc logging)',
+  (await page.locator('.fab').count()) === 0);
 const todayText = await page.locator('#view').innerText();
 check('the list is grouped under the named blocks',
   todayText.includes('Morning Prep') && todayText.includes('Closing'));

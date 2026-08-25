@@ -833,48 +833,84 @@ grant execute on function public.restore_member(uuid)                  to authen
 -- =============================================================================
 --  STORAGE — private bucket for the photo proof
 --  Files live at  <member-id>/<task-id>/<file>
+--
+--  On a hosted project storage.objects belongs to supabase_storage_admin, and
+--  depending on how old the project is, the SQL editor may not be allowed to
+--  touch it. The whole block is therefore wrapped so a privilege error prints
+--  instructions instead of aborting the rest of this file.
 -- =============================================================================
 
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('task-photos', 'task-photos', false, 15728640,
-        array['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
-on conflict (id) do update
-  set public = false,
-      file_size_limit = excluded.file_size_limit,
-      allowed_mime_types = excluded.allowed_mime_types;
+do $storage$
+begin
+  begin
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('task-photos', 'task-photos', false, 15728640,
+            array['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
+    on conflict (id) do update
+      set public = false,
+          file_size_limit = excluded.file_size_limit,
+          allowed_mime_types = excluded.allowed_mime_types;
+  exception when insufficient_privilege then
+    raise notice 'Could not create the task-photos bucket from SQL. Create it by hand: Storage -> New bucket -> name "task-photos", Public OFF.';
+  end;
 
-drop policy if exists task_photos_insert on storage.objects;
-create policy task_photos_insert on storage.objects for insert to authenticated
-  with check (
-    bucket_id = 'task-photos'
-    and (storage.foldername(name))[1] = public.me()::text
-  );
+  begin
+    execute 'drop policy if exists task_photos_insert on storage.objects';
+    execute $p$
+      create policy task_photos_insert on storage.objects for insert to authenticated
+        with check (
+          bucket_id = 'task-photos'
+          and (storage.foldername(storage.objects.name))[1] = public.me()::text
+        )$p$;
 
-drop policy if exists task_photos_select on storage.objects;
-create policy task_photos_select on storage.objects for select to authenticated
-  using (
-    bucket_id = 'task-photos'
-    and (
-      (storage.foldername(name))[1] = public.me()::text
-      or (public.is_manager() and exists (
-        select 1 from public.members m
-         where m.id::text = (storage.foldername(name))[1] and m.team_id = public.my_team()
-      ))
-    )
-  );
+    execute 'drop policy if exists task_photos_select on storage.objects';
+    execute $p$
+      create policy task_photos_select on storage.objects for select to authenticated
+        using (
+          bucket_id = 'task-photos'
+          and (
+            (storage.foldername(storage.objects.name))[1] = public.me()::text
+            or (
+              public.is_manager()
+              and exists (
+                select 1 from public.members m
+                 where m.id::text = (storage.foldername(storage.objects.name))[1]
+                   and m.team_id = public.my_team()
+              )
+            )
+          )
+        )$p$;
 
-drop policy if exists task_photos_delete on storage.objects;
-create policy task_photos_delete on storage.objects for delete to authenticated
-  using (
-    bucket_id = 'task-photos'
-    and (
-      (storage.foldername(name))[1] = public.me()::text
-      or (public.is_manager() and exists (
-        select 1 from public.members m
-         where m.id::text = (storage.foldername(name))[1] and m.team_id = public.my_team()
-      ))
-    )
-  );
+    execute 'drop policy if exists task_photos_update on storage.objects';
+    execute $p$
+      create policy task_photos_update on storage.objects for update to authenticated
+        using (
+          bucket_id = 'task-photos'
+          and (storage.foldername(storage.objects.name))[1] = public.me()::text
+        )$p$;
+
+    execute 'drop policy if exists task_photos_delete on storage.objects';
+    execute $p$
+      create policy task_photos_delete on storage.objects for delete to authenticated
+        using (
+          bucket_id = 'task-photos'
+          and (
+            (storage.foldername(storage.objects.name))[1] = public.me()::text
+            or (
+              public.is_manager()
+              and exists (
+                select 1 from public.members m
+                 where m.id::text = (storage.foldername(storage.objects.name))[1]
+                   and m.team_id = public.my_team()
+              )
+            )
+          )
+        )$p$;
+  exception when insufficient_privilege then
+    raise notice 'Could not create the storage policies from SQL (storage.objects is owned by supabase_storage_admin on this project). See SETUP.md - "Photos will not upload" - for the four policies to add under Storage -> Policies.';
+  end;
+end
+$storage$;
 
 -- =============================================================================
 --  REALTIME (live dashboard updates)

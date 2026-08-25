@@ -220,8 +220,27 @@ and add some. The list builds from there.
 it. If the crew's phone still shows the old list, they can pull down to refresh
 or reopen the app.
 
-**A photo won't upload.** Check **Storage** shows a private bucket named
-`task-photos`; if not, re-run the schema.
+**Photos will not upload / "does not have permission".** The storage rules are
+missing. On some Supabase projects the SQL editor isn't allowed to create them,
+and the schema prints a notice saying so rather than failing.
+
+First check **Storage** in the sidebar shows a bucket called `task-photos` with
+**Public** off. If it isn't there, create it: **New bucket** → name `task-photos`
+→ leave Public **off** → Save.
+
+Then **Storage** → **Policies** → on the `objects` table → **New policy** →
+*For full customization*, and add these four. Each one is for the
+**authenticated** role, on the `task-photos` bucket:
+
+| Policy name | Operation | Expression (USING / WITH CHECK) |
+|---|---|---|
+| `task_photos_insert` | INSERT | `bucket_id = 'task-photos' and (storage.foldername(storage.objects.name))[1] = public.me()::text` |
+| `task_photos_select` | SELECT | `bucket_id = 'task-photos' and ((storage.foldername(storage.objects.name))[1] = public.me()::text or (public.is_manager() and exists (select 1 from public.members m where m.id::text = (storage.foldername(storage.objects.name))[1] and m.team_id = public.my_team())))` |
+| `task_photos_update` | UPDATE | same expression as insert |
+| `task_photos_delete` | DELETE | same expression as select |
+
+In plain terms: everyone writes into their own folder, everyone reads their own
+photos, and a manager reads their whole team's.
 
 **"Your account does not have permission for that."** Row-level security doing
 its job — that person is on a different team, or their access was turned off.

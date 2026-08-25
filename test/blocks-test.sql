@@ -131,7 +131,34 @@ select public.ensure_todays_tasks(date '2026-08-29') as saturday_built;
 select title from public.tasks
  where work_date = date '2026-08-29' and title like 'Weekend%';
 
-\echo '--- 14. another team sees none of these blocks'
+\echo '--- 14. photo files: crew upload to their own folder, manager can see them'
+reset role;
+grant insert, select, update, delete on storage.objects to authenticated;
+set role authenticated;
+
+-- Jose (crew) uploads
+set request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
+insert into storage.objects (bucket_id, name, owner)
+values ('task-photos', public.me()::text || '/1/proof.jpg', public.me());
+select count(*) as jose_sees_own_file from storage.objects;
+
+-- Mia (crew) cannot see Jose's file
+set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
+select count(*) as mia_sees_jose_file from storage.objects;
+
+-- Sam (manager) can
+set request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+select count(*) as manager_sees_crew_file from storage.objects;
+
+-- a crew member cannot write into someone else's folder (expect failure)
+set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
+\echo '    (writing into a teammate''s folder must fail — expect an error next)'
+\set ON_ERROR_STOP off
+insert into storage.objects (bucket_id, name, owner)
+values ('task-photos', '22222222-2222-2222-2222-222222222222/1/sneaky.jpg', public.me());
+\set ON_ERROR_STOP on
+
+\echo '--- 15. another team sees none of these blocks'
 reset role;   -- signing up goes through Supabase Auth, not as a table user
 insert into auth.users (id, email) values ('44444444-4444-4444-4444-444444444444', 'rival@x.test');
 set role authenticated;
@@ -140,4 +167,5 @@ select public.create_team('Rival Co', 'Riv') -> 'team' ->> 'name' as other_team;
 select count(*) as rival_sees_blocks from public.blocks;
 select count(*) as rival_sees_items  from public.block_items;
 select public.ensure_todays_tasks(current_date) as rival_gets_nothing;
+select count(*) as rival_sees_photo_files from storage.objects;
 reset role;

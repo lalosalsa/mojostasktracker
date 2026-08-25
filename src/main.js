@@ -9,7 +9,7 @@ import { route, setNotFound, startRouter, navigate, parse, resolve } from './rou
 import * as data from './data.js';
 
 import { setupView, signInView, teamSetupView, disabledView, errorView } from './views/auth.js';
-import { todayView, openLogSheet } from './views/today.js';
+import { todayView } from './views/today.js';
 import { historyView } from './views/history.js';
 import { meView } from './views/me.js';
 import { dashboardView } from './views/dashboard.js';
@@ -127,10 +127,6 @@ function registerRoutes() {
   route('/today', guarded(todayView));
   route('/history', guarded(historyView));
   route('/me', guarded(meView));
-  route('/log', guarded(async (container) => {
-    await todayView(container);
-    openLogSheet(() => resolve());
-  }));
 
   route('/dashboard', guarded(dashboardView, { managersOnly: true }));
   route('/review', guarded(reviewView, { managersOnly: true }));
