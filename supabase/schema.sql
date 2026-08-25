@@ -283,6 +283,37 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+/**
+ * Makes sure the signed-in user has an account row, creating it from auth.users
+ * if it is missing. The signup trigger normally does this, but anyone who
+ * signed up before this schema — or before a reset.sql that cleared the app
+ * tables while Supabase kept the login — would otherwise be stuck with an
+ * account the app cannot see.
+ */
+create or replace function public.ensure_account()
+returns public.accounts language plpgsql security definer set search_path = public as $$
+declare v_account public.accounts;
+begin
+  if auth.uid() is null then return null; end if;
+
+  select * into v_account from public.accounts where id = auth.uid();
+  if found then return v_account; end if;
+
+  insert into public.accounts (id, email, name)
+  select u.id,
+         lower(u.email),
+         coalesce(
+           nullif(u.raw_user_meta_data ->> 'full_name', ''),
+           initcap(replace(replace(split_part(u.email, '@', 1), '.', ' '), '_', ' '))
+         )
+    from auth.users u
+   where u.id = auth.uid()
+  on conflict (id) do nothing;
+
+  select * into v_account from public.accounts where id = auth.uid();
+  return v_account;
+end $$;
+
 /** Every team this account belongs to, for the switcher. */
 create or replace function public.my_teams()
 returns table (
@@ -309,8 +340,8 @@ declare
   v_member  public.members;
   v_team    public.teams;
 begin
-  select * into v_account from public.accounts where id = auth.uid();
-  if not found then return null; end if;
+  v_account := public.ensure_account();
+  if v_account.id is null then return null; end if;
 
   -- fall back to any team they belong to if none is marked active
   if v_account.active_team_id is null then
@@ -340,6 +371,7 @@ end $$;
 create or replace function public.set_my_name(p_name text)
 returns json language plpgsql security definer set search_path = public as $$
 begin
+  perform public.ensure_account();
   if coalesce(trim(p_name), '') = '' then return public.whoami(); end if;
 
   update public.accounts set name = left(trim(p_name), 80) where id = auth.uid();
@@ -380,8 +412,8 @@ declare
   v_account public.accounts;
   v_member  public.members;
 begin
-  select * into v_account from public.accounts where id = auth.uid();
-  if not found then raise exception 'Finish signing up first'; end if;
+  v_account := public.ensure_account();
+  if v_account.id is null then raise exception 'Finish signing up first'; end if;
   if coalesce(trim(p_team_name), '') = '' then raise exception 'Give your team a name'; end if;
 
   if exists (select 1 from public.members
@@ -429,8 +461,8 @@ declare
   v_account public.accounts;
   v_member  public.members;
 begin
-  select * into v_account from public.accounts where id = auth.uid();
-  if not found then raise exception 'Finish signing up first'; end if;
+  v_account := public.ensure_account();
+  if v_account.id is null then raise exception 'Finish signing up first'; end if;
 
   select * into v_team from public.teams
    where join_code = v_code or manager_code = v_code;
@@ -478,9 +510,14 @@ begin
     raise exception 'You are the only manager. Make someone else a manager first.';
   end if;
 
+  -- marked, not deleted: tasks and photos point at this membership, so deleting
+  -- it would wipe the manager's record of who did what
   perform set_config('app.member_guard_bypass', '1', true);
-  delete from public.members where id = v_member;
+  update public.members set status = 'removed' where id = v_member;
   perform set_config('app.member_guard_bypass', '0', true);
+
+  update public.tasks set assigned_to = null
+   where assigned_to = v_member and status in ('open', 'in_progress', 'rejected');
 
   update public.accounts set active_team_id = (
     select m.team_id from public.members m
@@ -978,6 +1015,7 @@ alter default privileges in schema public grant usage, select on sequences to au
 
 grant execute on function public.whoami()                              to authenticated;
 grant execute on function public.set_my_name(text)                     to authenticated;
+grant execute on function public.ensure_account()                      to authenticated;
 grant execute on function public.my_teams()                            to authenticated;
 grant execute on function public.my_membership()                       to authenticated;
 grant execute on function public.switch_team(uuid)                     to authenticated;

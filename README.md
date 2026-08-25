@@ -118,9 +118,13 @@ browser only — handy for poking at a project without a rebuild.
 
 ```bash
 npm i -D playwright && npx playwright install chromium   # one-time, for npm test
-npm run build && npm test   # boots the built app in Chromium against a mocked Supabase
+npm run build && npm test   # schema/app drift check, then the app in Chromium
 npm run test:db             # applies the schema to a throwaway Postgres, exercises RLS
 ```
+
+`npm test` first checks every table and RPC the app calls actually exists in
+`supabase/schema.sql` and is granted to `authenticated` — cheap insurance against
+the app and the database drifting apart — then drives the built app.
 
 Playwright is deliberately *not* a dependency — it would be downloaded on every
 Vercel deploy for no reason.

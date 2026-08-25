@@ -3,6 +3,18 @@
 
 import { sb, friendlyError } from './supabase.js';
 import { PHOTO_BUCKET } from './config.js';
+import { state } from './store.js';
+
+/**
+ * The id of your membership of the team you're currently in. Everything in the
+ * database points at this — NOT at the auth user id. One person on two teams has
+ * two of these, and using the wrong one fails a foreign key or a storage policy.
+ */
+function meId() {
+  const id = state.me?.id;
+  if (!id) throw new Error('You are not on a team yet — pick one first.');
+  return id;
+}
 
 export function todayStr(d = new Date()) {
   const off = d.getTimezoneOffset() * 60000;
@@ -112,8 +124,13 @@ export const rotateTeamCode = (which = 'join') =>
 export const renameTeam = (name) => sb().rpc('rename_team', { p_name: name }).then(unwrap);
 
 export async function updateMyProfile(patch) {
-  const { data: { user } } = await sb().auth.getUser();
-  return unwrap(await sb().from('members').update(patch).eq('id', user.id).select().single());
+  // the name is shared across every team you're on, the rest is per-team
+  const { name, ...rest } = patch;
+  if (name !== undefined) await setMyName(name);
+  if (!Object.keys(rest).length) {
+    return unwrap(await sb().from('members').select('*').eq('id', meId()).single());
+  }
+  return unwrap(await sb().from('members').update(rest).eq('id', meId()).select().single());
 }
 
 export const touchLastSeen = () => sb().rpc('touch_last_seen').then(() => {}, () => {});
@@ -190,7 +207,6 @@ export function groupByBlock(tasks) {
 }
 
 export async function createTask(fields) {
-  const { data: { user } } = await sb().auth.getUser();
   const row = {
     title: fields.title,
     description: fields.description || '',
@@ -200,7 +216,7 @@ export async function createTask(fields) {
     work_date: fields.workDate || todayStr(),
     due_date: fields.dueDate || fields.workDate || todayStr(),
     status: fields.status || 'open',
-    created_by: user.id,
+    created_by: meId(),
   };
   if (fields.assignedTo !== undefined) row.assigned_to = fields.assignedTo || null;
   return decorate(unwrap(await sb().from('tasks').insert(row).select(TASK_FIELDS).single()));
@@ -210,8 +226,11 @@ export const updateTask = async (id, patch) =>
   decorate(unwrap(await sb().from('tasks').update(patch).eq('id', id).select(TASK_FIELDS).single()));
 
 export async function startTask(id) {
-  const { data: { user } } = await sb().auth.getUser();
-  return updateTask(id, { status: 'in_progress', assigned_to: user.id, started_at: new Date().toISOString() });
+  return updateTask(id, {
+    status: 'in_progress',
+    assigned_to: meId(),
+    started_at: new Date().toISOString(),
+  });
 }
 
 export async function completeTask(id, { notes = '', minutes = null } = {}) {
@@ -287,9 +306,10 @@ export async function signedUrls(paths) {
 }
 
 export async function uploadPhoto(task, { photo, thumb, width, height, caption = '', location = null }) {
-  const { data: { user } } = await sb().auth.getUser();
+  const member = meId();
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const base = `${user.id}/${task.id}/${stamp}`;
+  // the storage policy checks this first folder against your membership id
+  const base = `${member}/${task.id}/${stamp}`;
   const contentType = photo.type && photo.type.startsWith('image/') ? photo.type : 'image/jpeg';
   const ext = contentType.split('/')[1].replace('jpeg', 'jpg');
 
@@ -308,7 +328,7 @@ export async function uploadPhoto(task, { photo, thumb, width, height, caption =
     return unwrap(
       await sb().from('task_photos').insert({
         task_id: task.id,
-        member_id: user.id,
+        member_id: member,
         storage_path: mainPath,
         thumb_path: thumbPath,
         mime: contentType,
@@ -366,7 +386,6 @@ export const listBlocks = async () =>
   ) || [];
 
 export async function createBlock(fields, teamId) {
-  const { data: { user } } = await sb().auth.getUser();
   const existing = await listBlocks();
   return unwrap(await sb().from('blocks').insert({
     team_id: teamId,
@@ -374,7 +393,7 @@ export async function createBlock(fields, teamId) {
     starts_at: fields.startsAt || null,
     ends_at: fields.endsAt || null,
     position: existing.length,
-    created_by: user.id,
+    created_by: meId(),
   }).select().single());
 }
 
@@ -398,7 +417,6 @@ export async function moveBlock(blocks, id, direction) {
 }
 
 export async function addBlockItem(blockId, teamId, fields) {
-  const { data: { user } } = await sb().auth.getUser();
   const siblings = unwrap(await sb().from('block_items').select('id').eq('block_id', blockId)) || [];
   return unwrap(await sb().from('block_items').insert({
     block_id: blockId,
@@ -411,7 +429,7 @@ export async function addBlockItem(blockId, teamId, fields) {
     assigned_to: fields.assignedTo || null,
     weekdays: fields.weekdays?.length && fields.weekdays.length < 7 ? fields.weekdays : null,
     position: siblings.length,
-    created_by: user.id,
+    created_by: meId(),
   }).select().single());
 }
 

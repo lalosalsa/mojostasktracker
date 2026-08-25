@@ -40,12 +40,15 @@ const TEAM2 = { id: 'aaaaaaaa-0000-0000-0000-000000000002', name: 'Mojo Airport'
   join_code: 'H3N8VD', manager_code: 'Q9WKTM', created_at: '2026-01-01T00:00:00Z' };
 const ACCOUNT = { id: USER_ID, email: 'boss@mojo.test', name: 'Sam Boss',
   active_team_id: TEAM.id, created_at: '2026-01-01T00:00:00Z' };
+const MEMBER_ID = 'bbbbbbbb-0000-0000-0000-000000000001';
 const profile = {
-  id: USER_ID, team_id: TEAM.id, email: 'boss@mojo.test', name: 'Sam Boss', role: 'manager',
+  id: MEMBER_ID, account_id: USER_ID, team_id: TEAM.id, email: 'boss@mojo.test',
+  name: 'Sam Boss', role: 'manager',
   status: 'active', job_title: 'Manager', phone: '', created_at: '2026-01-01T00:00:00Z',
   last_seen_at: new Date().toISOString(),
 };
-const employee = { ...profile, id: '22222222-2222-2222-2222-222222222222',
+const employee = { ...profile, id: 'bbbbbbbb-0000-0000-0000-000000000002',
+  account_id: '22222222-2222-2222-2222-222222222222',
   email: 'jose@mojo.test', name: 'Jose P', role: 'employee' };
 const BLOCKS = [
   { id: 1, team_id: TEAM.id, name: 'Morning Prep', starts_at: '07:00:00', ends_at: '11:00:00',
@@ -111,7 +114,7 @@ let uploadedPath = '';
 let uploadedBytes = 0;
 let uploadedRows = 0;
 const who = () => {
-  const base = identity === 'manager' ? profile : { ...employee, id: USER_ID };
+  const base = identity === 'manager' ? profile : { ...employee, account_id: USER_ID };
   return hasTeam ? base : { ...base, team_id: null, role: 'employee' };
 };
 const activeTeam = () => (switchedTo === TEAM2.id ? TEAM2 : TEAM);
@@ -198,13 +201,13 @@ await context.route(`${SUPA}/**`, async (route) => {
   if (url.includes('/rest/v1/rpc/ensure_todays_tasks')) return json(route, 0);
   if (url.includes('/rest/v1/rpc/touch_last_seen')) return json(route, null);
   if (url.includes('/rest/v1/members')) {
-    if (url.includes(`id=eq.${USER_ID}`)) return json(route, who());
+    if (url.includes(`id=eq.${MEMBER_ID}`) || url.includes(`id=eq.${who().id}`)) return json(route, who());
     return json(route, [profile, employee]);
   }
   if (url.includes('/rest/v1/teams')) return json(route, [TEAM]);
   if (url.includes('/rest/v1/task_photos')) {
     uploadedRows += 1;
-    return json(route, { id: 99, task_id: 2, user_id: USER_ID, storage_path: uploadedPath,
+    return json(route, { id: 99, task_id: 2, member_id: who().id, storage_path: uploadedPath,
       thumb_path: null, caption: '', latitude: null, longitude: null,
       created_at: new Date().toISOString() });
   }
@@ -552,8 +555,8 @@ await fc.setFiles(path.join(PUBLIC, 'icons', 'icon-512.png'));
 for (let i = 0; i < 60 && uploadedRows === 0; i += 1) await page.waitForTimeout(250);
 await page.waitForFunction(() => document.querySelector('.gallery .shot img'), null, { timeout: 10000 })
   .catch(() => {});
-check('photo uploaded to storage under the user folder',
-  uploadedPath.startsWith(`${USER_ID}/2/`), uploadedPath);
+check('photo uploaded under the membership folder, not the login id',
+  uploadedPath.startsWith(`${who().id}/2/`) && !uploadedPath.startsWith(USER_ID), uploadedPath);
 console.log(`      (${uploadedBytes} bytes after shrinking)`);
 check('photo was compressed to JPEG before upload',
   uploadedPath.endsWith('.jpg') && uploadedBytes > 0 && uploadedBytes < 300_000, `${uploadedBytes} bytes`);

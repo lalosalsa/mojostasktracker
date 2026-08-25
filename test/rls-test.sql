@@ -134,6 +134,27 @@ select public.ensure_todays_tasks(current_date) as second_call;
 select public.switch_team((select id from public.teams where name = 'Mojo Airport')) -> 'team' ->> 'name' as now_at;
 select public.ensure_todays_tasks(current_date) as airport_gets_nothing;
 
+\echo '--- 19a. leaving a team keeps the record of what you finished'
+set request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
+select public.switch_team((select id from public.teams where name = 'Mojo Airport')) -> 'team' ->> 'name' as jose_at;
+select public.leave_team() -> 'teams' as jose_teams_after_leaving;
+set request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+select public.switch_team((select id from public.teams where name = 'Mojo Downtown')) -> 'team' ->> 'name' as sam_at;
+select t.title, m.name as still_credited_to
+  from public.tasks t join public.members m on m.id = t.completed_by
+ where t.completed_by is not null;
+
+\echo '--- 19b. a login that predates this schema heals itself'
+-- reset.sql clears the app tables but Supabase keeps the auth users, so a
+-- returning login can arrive with no account row at all
+reset role;
+insert into auth.users (id, email) values ('55555555-5555-5555-5555-555555555555', 'legacy@mojo.test');
+delete from public.accounts where id = '55555555-5555-5555-5555-555555555555';
+set role authenticated;
+set request.jwt.claims = '{"sub":"55555555-5555-5555-5555-555555555555"}';
+select public.whoami() -> 'account' ->> 'email' as account_rebuilt;
+select public.create_team('Recovered Shop', 'Legacy User') -> 'team' ->> 'name' as can_create_team;
+
 \echo '--- 20. a manager can still fix things from the SQL editor (no JWT)'
 reset role;
 reset request.jwt.claims;

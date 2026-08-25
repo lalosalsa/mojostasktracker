@@ -236,6 +236,12 @@ your locations first.
 **Screens error out right after signing in.** The database tables aren't there —
 run `supabase/schema.sql` (step 2).
 
+**"Finish signing up first" when creating a team, on an account that already
+exists.** This happens if you ran `supabase/reset.sql` at some point: it clears
+the app's tables but Supabase keeps the logins, so the account had no record left
+in the app. Re-run `supabase/schema.sql` — accounts now rebuild themselves on
+first use, and the next sign-in works.
+
 **The crew's list is empty.** No blocks have tasks in them yet — go to **Blocks**
 and add some. The list builds from there.
 
