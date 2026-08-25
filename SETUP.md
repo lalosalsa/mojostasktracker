@@ -223,7 +223,7 @@ what isn't:
 ```
  item                  | result                              | verdict
 -----------------------+-------------------------------------+---------
- schema version        | 2026.08.25-a                        | ok
+ schema version        | 2026.08.25-b                        | ok
  tables present        | 9 of 9                              | ok
  functions present     | 15 of 15                            | ok
  logins vs app records | 4 logins, 4 accounts, 4 memberships | ok
@@ -257,6 +257,11 @@ your locations first.
 
 **Screens error out right after signing in.** The database tables aren't there —
 run `supabase/schema.sql` (step 2).
+
+**"null value in column id of relation members".** Your project was set up under
+an earlier version, and `create table if not exists` skipped the change that
+lets that table generate its own ids. Re-run `supabase/schema.sql` — it now
+repairs an older project in place — then try again.
 
 **"Finish signing up first" when creating a team, on an account that already
 exists.** This happens if you ran `supabase/reset.sql` at some point: it clears

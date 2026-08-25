@@ -164,9 +164,6 @@ create table if not exists public.tasks (
 create index if not exists tasks_team_date_idx     on public.tasks (team_id, work_date desc);
 create index if not exists tasks_assigned_date_idx on public.tasks (assigned_to, work_date desc);
 create index if not exists tasks_status_idx        on public.tasks (status);
-create unique index if not exists tasks_block_item_day_idx
-  on public.tasks (block_item_id, work_date) where block_item_id is not null;
-create index if not exists tasks_block_idx on public.tasks (block_id);
 
 create table if not exists public.task_photos (
   id           bigint generated always as identity primary key,
@@ -197,6 +194,95 @@ create table if not exists public.activity (
   created_at timestamptz not null default now()
 );
 create index if not exists activity_team_idx on public.activity (team_id, id desc);
+
+-- =============================================================================
+--  RECONCILE
+--  "create table if not exists" skips a table that already exists, so a project
+--  set up against an earlier version keeps the old columns, defaults and checks
+--  and then fails at runtime. Everything below is idempotent and brings an older
+--  project up to the current shape without touching its data.
+-- =============================================================================
+
+do $reconcile$
+begin
+  -- members.id used to BE the auth user id, so it had no default of its own.
+  -- Without this an insert sends null and the row is rejected.
+  alter table public.members alter column id set default gen_random_uuid();
+  alter table public.members alter column email set default '';
+  alter table public.members alter column name set default '';
+
+  alter table public.members  add column if not exists account_id    uuid;
+  alter table public.members  add column if not exists job_title     text not null default '';
+  alter table public.members  add column if not exists phone         text not null default '';
+  alter table public.members  add column if not exists last_seen_at  timestamptz;
+
+  alter table public.tasks    add column if not exists block_id      bigint;
+  alter table public.tasks    add column if not exists block_item_id bigint;
+  alter table public.tasks    add column if not exists completed_by  uuid;
+  alter table public.tasks    add column if not exists minutes_spent integer;
+  alter table public.tasks    add column if not exists review_note   text not null default '';
+
+  alter table public.block_items add column if not exists weekdays   smallint[];
+  alter table public.block_items add column if not exists assigned_to uuid;
+
+  alter table public.task_photos add column if not exists member_id  uuid;
+  alter table public.task_photos add column if not exists thumb_path text;
+  alter table public.task_photos add column if not exists caption    text not null default '';
+
+  -- the very first version called this column user_id
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'task_photos' and column_name = 'user_id')
+  then
+    update public.task_photos set member_id = user_id where member_id is null;
+  end if;
+
+  -- status gained 'removed' after the first release
+  alter table public.members drop constraint if exists members_status_check;
+  alter table public.members add  constraint members_status_check
+    check (status in ('active', 'disabled', 'removed'));
+
+  -- and roles were once called admin/employee
+  update public.members set role = 'manager' where role = 'admin';
+  alter table public.members drop constraint if exists members_role_check;
+  alter table public.members add  constraint members_role_check
+    check (role in ('employee', 'manager'));
+exception when undefined_table then
+  null;   -- a brand-new project: the create statements above already got it right
+end
+$reconcile$;
+
+-- Indexes that depend on the columns above, so they run only once those exist.
+create unique index if not exists tasks_block_item_day_idx
+  on public.tasks (block_item_id, work_date) where block_item_id is not null;
+create index if not exists tasks_block_idx on public.tasks (block_id);
+
+-- Foreign keys for the columns just added, each only if it isn't there yet.
+do $fks$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'tasks_block_id_fkey') then
+    alter table public.tasks add constraint tasks_block_id_fkey
+      foreign key (block_id) references public.blocks(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'tasks_block_item_id_fkey') then
+    alter table public.tasks add constraint tasks_block_item_id_fkey
+      foreign key (block_item_id) references public.block_items(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'tasks_completed_by_fkey') then
+    alter table public.tasks add constraint tasks_completed_by_fkey
+      foreign key (completed_by) references public.members(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'task_photos_member_id_fkey') then
+    alter table public.task_photos add constraint task_photos_member_id_fkey
+      foreign key (member_id) references public.members(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'block_items_assigned_to_fkey') then
+    alter table public.block_items add constraint block_items_assigned_to_fkey
+      foreign key (assigned_to) references public.members(id) on delete set null;
+  end if;
+exception when undefined_table or undefined_column then
+  null;
+end
+$fks$;
 
 -- =============================================================================
 --  WHO AM I
@@ -1146,7 +1232,7 @@ end $$;
 --  Record that this file ran, and how far it got.
 -- =============================================================================
 insert into public.schema_meta (id, version, applied_at)
-values (1, '2026.08.25-a', now())
+values (1, '2026.08.25-b', now())
 on conflict (id) do update set version = excluded.version, applied_at = now();
 
 grant select on public.schema_meta to authenticated;

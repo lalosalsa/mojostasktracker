@@ -59,3 +59,13 @@ $PSQL -c "create database writes;" >/dev/null
 $PSQL -d writes -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d writes -f "$HERE/../supabase/schema.sql" >/dev/null
 psql -h "$SOCK" -p "$PORT" -U postgres -d writes -f "$HERE/writes-test.sql"
+
+echo
+echo "=== upgrade from the previous release ==="
+$PSQL -c "drop database if exists upgraded;" >/dev/null
+$PSQL -c "create database upgraded;" >/dev/null
+$PSQL -d upgraded -f "$HERE/local-stubs.sql" >/dev/null
+$PSQL -d upgraded -f "$HERE/legacy-shape.sql" >/dev/null
+$PSQL -d upgraded -f "$HERE/../supabase/schema.sql" >/dev/null
+echo "old project upgraded in place"
+psql -h "$SOCK" -p "$PORT" -U postgres -d upgraded -f "$HERE/upgrade-test.sql"
