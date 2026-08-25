@@ -1,0 +1,273 @@
+/* Boot, session handling, chrome (header + tabs), and routing. */
+
+import './ui.js';
+import { el, esc, toast, initials } from './ui.js';
+import { isConfigured, APP_NAME, BUILD_ID } from './config.js';
+import { sb, friendlyError } from './supabase.js';
+import { state, setState, subscribe, isAdmin } from './store.js';
+import { route, setNotFound, startRouter, navigate, parse, resolve } from './router.js';
+import * as data from './data.js';
+
+import { setupView, signInView, pendingView, disabledView, errorView } from './views/auth.js';
+import { todayView, openLogSheet } from './views/today.js';
+import { historyView } from './views/history.js';
+import { meView } from './views/me.js';
+import { dashboardView } from './views/dashboard.js';
+import { reviewView } from './views/review.js';
+import { teamView, } from './views/team.js';
+import { tasksAdminView, openTaskEditor } from './views/tasksAdmin.js';
+import { recurringView } from './views/recurring.js';
+import { reportsView } from './views/reports.js';
+
+/** Always resolve the live root — the shell is swapped out on sign-in/out, so
+    a cached reference goes stale and later renders land in a detached tree. */
+const root = () => document.getElementById('app');
+let shell = null;
+let realtimeChannel = null;
+let mountedUserId = null;
+
+/* ------------------------------------------------------------------ chrome */
+const TABS = {
+  employee: [
+    { path: '/today', label: 'Today', icon: '☑️' },
+    { path: '/history', label: 'History', icon: '🗓' },
+    { path: '/me', label: 'Me', icon: '👤' },
+  ],
+  admin: [
+    { path: '/dashboard', label: 'Overview', icon: '📊' },
+    { path: '/review', label: 'Review', icon: '🔍' },
+    { path: '/tasks', label: 'Tasks', icon: '📋' },
+    { path: '/team', label: 'Team', icon: '👷' },
+    { path: '/me', label: 'More', icon: '⋯' },
+  ],
+};
+
+function buildShell() {
+  const admin = isAdmin();
+  const tabs = admin ? TABS.admin : TABS.employee;
+
+  const node = el(`
+    <div class="app">
+      <header class="appbar">
+        <div style="min-width:0">
+          <h1 data-title>${esc(APP_NAME)}</h1>
+          <div class="sub" data-sub></div>
+        </div>
+        <span class="spacer"></span>
+        <button class="appbar-btn" data-refresh title="Refresh">⟳</button>
+        <button class="appbar-btn" data-profile title="Your account">
+          ${esc(initials(state.profile?.full_name || state.profile?.email))}
+        </button>
+      </header>
+      <div class="offline-bar" hidden data-offline>Offline — changes will need a connection to save</div>
+      <main class="view" id="view"></main>
+      <nav class="tabbar">
+        ${tabs.map((t) => `<button data-tab="${t.path}"><span class="ic">${t.icon}</span><span>${esc(t.label)}</span></button>`).join('')}
+      </nav>
+    </div>`);
+
+  node.querySelector('[data-refresh]').onclick = () => resolve();
+  node.querySelector('[data-profile]').onclick = () => navigate('/me');
+  node.querySelectorAll('[data-tab]').forEach((b) => {
+    b.onclick = () => navigate(b.dataset.tab);
+  });
+
+  root().replaceWith(node);
+  node.id = 'app';
+  return node;
+}
+
+function paintChrome() {
+  if (!shell) return;
+  const { path } = parse();
+  shell.querySelectorAll('[data-tab]').forEach((b) => {
+    b.classList.toggle('active', path.startsWith(b.dataset.tab));
+  });
+  const titles = {
+    '/today': "Today's work",
+    '/history': 'Your history',
+    '/me': 'Your account',
+    '/dashboard': 'Overview',
+    '/review': 'Photo review',
+    '/tasks': 'All tasks',
+    '/team': 'Your team',
+    '/recurring': 'Recurring tasks',
+    '/reports': 'Reports',
+  };
+  shell.querySelector('[data-title]').textContent = titles[path] || APP_NAME;
+  const name = state.profile?.full_name || state.profile?.email || '';
+  shell.querySelector('[data-sub]').textContent =
+    isAdmin() ? `${name} · Manager` : name;
+  shell.querySelector('[data-offline]').hidden = state.online;
+}
+
+/* ------------------------------------------------------------------ routes */
+function guarded(view, { adminOnly = false } = {}) {
+  return async (params) => {
+    if (!state.profile) return;
+    if (adminOnly && !isAdmin()) return navigate('/today', { replace: true });
+    const container = shell?.querySelector('#view');
+    if (!container) return;
+    paintChrome();
+    window.scrollTo({ top: 0 });
+    try {
+      await view(container, params);
+    } catch (err) {
+      console.error(err);
+      container.innerHTML = '';
+      container.appendChild(el(`
+        <div class="banner danger">
+          <span class="ic">⚠️</span>
+          <div><strong>Could not load this screen</strong><br>${esc(friendlyError(err))}</div>
+        </div>`));
+    }
+  };
+}
+
+function registerRoutes() {
+  route('/today', guarded(todayView));
+  route('/history', guarded(historyView));
+  route('/me', guarded(meView));
+  route('/log', guarded(async (container) => {
+    await todayView(container);
+    openLogSheet(() => resolve());
+  }));
+
+  route('/dashboard', guarded(dashboardView, { adminOnly: true }));
+  route('/review', guarded(reviewView, { adminOnly: true }));
+  route('/tasks', guarded(tasksAdminView, { adminOnly: true }));
+  route('/team', guarded(teamView, { adminOnly: true }));
+  route('/recurring', guarded(recurringView, { adminOnly: true }));
+  route('/reports', guarded(reportsView, { adminOnly: true }));
+  route('/new-task', guarded(async (container) => {
+    await tasksAdminView(container, {});
+    openTaskEditor(null, () => resolve());
+  }, { adminOnly: true }));
+
+  setNotFound(() => navigate(isAdmin() ? '/dashboard' : '/today', { replace: true }));
+}
+
+/* ---------------------------------------------------------------- realtime */
+function watchLive() {
+  realtimeChannel?.unsubscribe();
+  let pending = null;
+  const bump = () => {
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      const { path } = parse();
+      if (['/dashboard', '/review', '/today', '/tasks'].includes(path)) resolve();
+    }, 1200);
+  };
+  try {
+    realtimeChannel = sb()
+      .channel('tasks-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, bump)
+      .subscribe();
+  } catch { /* realtime is a nicety, never a blocker */ }
+}
+
+/* -------------------------------------------------------------------- boot */
+async function onSignedIn(session) {
+  setState({ session });
+  if (mountedUserId === session.user.id && shell) return;   // token refresh, not a new sign-in
+
+  let profile;
+  try {
+    profile = await data.waitForProfile(session.user.id);
+  } catch (err) {
+    return errorView(root(), friendlyError(err), () => location.reload());
+  }
+
+  if (!profile) {
+    return errorView(
+      root(),
+      'Your account was created but the profile row is missing. Re-run the setup SQL in Supabase, then try again.',
+      () => location.reload()
+    );
+  }
+  setState({ profile });
+
+  if (profile.status === 'pending') return pendingView(root(), profile);
+  if (profile.status === 'disabled') return disabledView(root());
+
+  shell = buildShell();
+  mountedUserId = session.user.id;
+  registerRoutes();
+  watchLive();
+  data.touchLastSeen();
+
+  const { path } = parse();
+  const home = isAdmin() ? '/dashboard' : '/today';
+  if (!path || path === '/') navigate(home, { replace: true });
+  await startRouter();
+  paintChrome();
+}
+
+function onSignedOut() {
+  realtimeChannel?.unsubscribe();
+  realtimeChannel = null;
+  setState({ session: null, profile: null });
+  shell = null;
+  mountedUserId = null;
+  signInView(root());
+}
+
+async function boot() {
+  if (!isConfigured()) {
+    setupView(root());
+    return;
+  }
+
+  let client;
+  try {
+    client = sb();
+  } catch {
+    return setupView(root());
+  }
+
+  client.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' || !session) {
+      if (event === 'SIGNED_OUT') onSignedOut();
+      return;
+    }
+    setState({ session });
+    if (!shell && !['pending', 'disabled'].includes(state.profile?.status)) onSignedIn(session);
+  });
+
+  const { data: { session }, error } = await client.auth.getSession();
+  if (error) console.warn(error);
+  if (session) await onSignedIn(session);
+  else onSignedOut();
+}
+
+/* ------------------------------------------------------------ app plumbing */
+window.addEventListener('online', () => { setState({ online: true }); paintChrome(); resolve(); });
+window.addEventListener('offline', () => { setState({ online: false }); paintChrome(); });
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  setState({ installEvent: e });
+});
+window.addEventListener('appinstalled', () => {
+  setState({ installEvent: null });
+  toast('Installed — open it from your home screen', 'ok');
+});
+
+// Keep "last seen" fresh while the app is open, so managers see who's working.
+setInterval(() => { if (state.profile?.status === 'active') data.touchLastSeen(); }, 5 * 60_000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.profile?.status === 'active') resolve();
+});
+
+subscribe(paintChrome);
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`/sw.js?v=${BUILD_ID}`).catch(() => {});
+  });
+}
+
+boot().catch((err) => {
+  console.error(err);
+  errorView(root(), friendlyError(err), () => location.reload());
+});

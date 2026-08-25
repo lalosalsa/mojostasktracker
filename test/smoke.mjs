@@ -1,0 +1,283 @@
+/**
+ * Browser smoke test: boots the built app against a mocked Supabase and walks
+ * the crew and manager screens. Run with:  node test/smoke.mjs
+ */
+import { chromium } from 'playwright';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PUBLIC = path.join(ROOT, 'public');
+const PORT = 4321;
+const SUPA = 'https://demo.supabase.co';
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
+  '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.map': 'application/json' };
+
+const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const failures = [];
+const check = (name, ok, extra = '') => {
+  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${extra ? ` — ${extra}` : ''}`);
+  if (!ok) failures.push(name);
+};
+
+/* ------------------------------------------------------------ static server */
+const server = http.createServer((req, res) => {
+  const url = req.url.split('?')[0];
+  let file = path.join(PUBLIC, url === '/' ? 'index.html' : url);
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(PUBLIC, 'index.html');
+  res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+  fs.createReadStream(file).pipe(res);
+});
+await new Promise((r) => server.listen(PORT, r));
+
+/* ------------------------------------------------------------- fake backend */
+const USER_ID = '11111111-1111-1111-1111-111111111111';
+const profile = {
+  id: USER_ID, email: 'boss@mojo.test', full_name: 'Sam Boss', role: 'admin',
+  status: 'active', job_title: 'Owner', phone: '', created_at: '2026-01-01T00:00:00Z',
+  last_seen_at: new Date().toISOString(),
+};
+const employee = { ...profile, id: '22222222-2222-2222-2222-222222222222', email: 'jose@mojo.test', full_name: 'Jose P', role: 'employee' };
+const tasks = [
+  { id: 1, title: 'Sweep the shop floor', description: 'Front to back', location: 'Bay 2',
+    status: 'submitted', priority: 'high', requires_photo: true, work_date: today, due_date: today,
+    notes: 'Found a broken pallet', review_note: '', minutes_spent: 25, template_id: null,
+    created_at: `${today}T14:00:00Z`, started_at: `${today}T15:00:00Z`, completed_at: `${today}T16:00:00Z`,
+    reviewed_at: null, assigned_to: employee.id, created_by: USER_ID, reviewed_by: null,
+    assignee: { id: employee.id, full_name: 'Jose P', email: 'jose@mojo.test' }, reviewer: null,
+    photos: [{ id: 7, storage_path: `${employee.id}/1/a.jpg`, thumb_path: null, caption: '',
+               latitude: null, longitude: null, created_at: `${today}T16:00:00Z`, user_id: employee.id }] },
+  { id: 2, title: 'Restock the van', description: '', location: '', status: 'open', priority: 'normal',
+    requires_photo: true, work_date: today, due_date: today, notes: '', review_note: '', minutes_spent: null,
+    template_id: null, created_at: `${today}T14:00:00Z`, started_at: null, completed_at: null,
+    reviewed_at: null, assigned_to: USER_ID, created_by: USER_ID, reviewed_by: null,
+    assignee: { id: USER_ID, full_name: 'Sam Boss', email: 'boss@mojo.test' }, reviewer: null, photos: [] },
+];
+
+const json = (route, body, status = 200) =>
+  route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body),
+    headers: { 'access-control-allow-origin': '*' } });
+
+const browser = await chromium.launch(
+  fs.existsSync('/opt/pw-browsers/chromium') ? { executablePath: '/opt/pw-browsers/chromium' } : {}
+);
+const context = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 2,
+  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+});
+
+let otpRequested = false;
+let identity = 'admin';
+let uploadedPath = '';
+let uploadedBytes = 0;
+let uploadedRows = 0;
+const who = () => (identity === 'admin' ? profile : { ...employee, id: USER_ID });
+await context.route(`${SUPA}/**`, async (route) => {
+  const url = route.request().url();
+  const method = route.request().method();
+  if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' } });
+
+  if (url.includes('/auth/v1/otp')) { otpRequested = true; return json(route, {}); }
+  if (url.includes('/auth/v1/verify')) return json(route, { access_token: 'x', user: { id: USER_ID } });
+  if (url.includes('/auth/v1/user')) return json(route, profile);
+  if (url.includes('/rest/v1/rpc/employee_day_stats')) {
+    return json(route, [{ id: employee.id, full_name: 'Jose P', email: 'jose@mojo.test', job_title: 'Tech',
+      last_seen_at: new Date().toISOString(), assigned: 3, completed: 2, remaining: 1, awaiting_review: 1,
+      photos: 4, last_completed_at: `${today}T16:00:00Z` }]);
+  }
+  if (url.includes('/rest/v1/rpc/daily_trend')) {
+    return json(route, Array.from({ length: 14 }, (_, i) => ({ day: today, total: 5 + i % 3, completed: 3 + i % 2 })));
+  }
+  if (url.includes('/rest/v1/rpc/range_stats')) {
+    return json(route, [{ total: 8, open: 2, submitted: 1, verified: 5, rejected: 0, completed: 6, photos: 12 }]);
+  }
+  if (url.includes('/rest/v1/rpc/ensure_todays_tasks')) return json(route, 0);
+  if (url.includes('/rest/v1/rpc/touch_last_seen')) return json(route, null);
+  if (url.includes('/rest/v1/profiles')) {
+    if (url.includes('status=eq.pending')) return json(route, []);
+    if (url.includes(`id=eq.${USER_ID}`)) return json(route, who());
+    return json(route, [profile, employee]);
+  }
+  if (url.includes('/rest/v1/task_photos')) {
+    uploadedRows += 1;
+    return json(route, { id: 99, task_id: 2, user_id: USER_ID, storage_path: uploadedPath,
+      thumb_path: null, caption: '', latitude: null, longitude: null,
+      created_at: new Date().toISOString() });
+  }
+  if (url.includes('/storage/v1/object/task-photos/')) {
+    uploadedPath = url.split('/storage/v1/object/task-photos/')[1];
+    uploadedBytes = (route.request().postDataBuffer() || Buffer.alloc(0)).length;
+    return json(route, { Key: `task-photos/${uploadedPath}` });
+  }
+  if (url.includes('/rest/v1/tasks')) {
+    if (url.includes('status=eq.submitted')) return json(route, tasks.filter((t) => t.status === 'submitted'));
+    return json(route, tasks);
+  }
+  if (url.includes('/rest/v1/activity')) {
+    return json(route, [{ id: 1, type: 'task.completed', actor_name: 'Jose P', detail: 'Sweep the shop floor', created_at: new Date().toISOString() }]);
+  }
+  if (url.includes('/rest/v1/invites')) return json(route, []);
+  if (url.includes('/rest/v1/task_templates')) return json(route, []);
+  // storage-js asks for signed paths, then builds the full URL itself
+  if (url.includes('/storage/v1/object/sign/') && method === 'POST') {
+    return json(route, [{ error: null, path: `${employee.id}/1/a.jpg`,
+      signedURL: `/object/sign/task-photos/${employee.id}/1/a.jpg?token=demo` }]);
+  }
+  if (url.includes('/storage/v1/object/sign/') && method === 'GET') {
+    return route.fulfill({ status: 200, contentType: 'image/png',
+      headers: { 'access-control-allow-origin': '*' },
+      body: fs.readFileSync(path.join(PUBLIC, 'icons', 'icon-192.png')) });
+  }
+  if (url.includes('/realtime/')) return route.abort();
+  return json(route, []);
+});
+
+const errors = [];
+const page = await context.newPage();
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('pageerror', (e) => errors.push(String(e)));
+
+console.log('\nSetup screen');
+await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
+check('shows the connect-your-database screen', await page.locator('text=Connect your database').isVisible());
+await page.screenshot({ path: 'test/shots/01-setup.png' });
+
+console.log('\nSign-in');
+await page.evaluate(([url, key]) => {
+  localStorage.setItem('mtt.supabaseUrl', url);
+  localStorage.setItem('mtt.supabaseKey', key);
+}, [SUPA, 'a'.repeat(40)]);
+await page.reload({ waitUntil: 'networkidle' });
+check('shows the email sign-in screen', await page.locator('#si-email').isVisible());
+await page.fill('#si-email', 'boss@mojo.test');
+await page.click('button[type=submit]');
+await page.waitForSelector('#si-code', { timeout: 5000 });
+check('asks for the emailed code', await page.locator('#si-code').isVisible());
+check('actually requested a code from Supabase', otpRequested);
+await page.screenshot({ path: 'test/shots/02-signin.png' });
+
+console.log('\nManager app');
+await page.evaluate(([id, url]) => {
+  const session = {
+    access_token: 'fake', refresh_token: 'fake', token_type: 'bearer',
+    expires_in: 999999, expires_at: Math.floor(Date.now() / 1000) + 999999,
+    user: { id, email: 'boss@mojo.test', aud: 'authenticated', role: 'authenticated',
+            app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' },
+  };
+  localStorage.setItem('mtt.auth', JSON.stringify(session));
+}, [USER_ID, SUPA]);
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('.tabbar', { timeout: 8000 });
+check('manager lands on the overview', await page.locator('text=Overview').first().isVisible());
+check('shows the crew scoreboard', await page.locator('text=Jose P').first().isVisible());
+check('flags work waiting on review', await page.locator('text=waiting on you').isVisible());
+await page.screenshot({ path: 'test/shots/03-dashboard.png', fullPage: true });
+
+await page.click('[data-tab="/review"]');
+await page.waitForSelector('text=Waiting on your sign-off', { timeout: 5000 });
+check('review queue lists the submitted task', await page.locator('text=Sweep the shop floor').first().isVisible());
+await page.waitForFunction(() => {
+  const img = document.querySelector('.card img[data-path]');
+  return img && img.complete && img.naturalWidth > 0;
+}, null, { timeout: 5000 }).catch(() => {});
+check('photo proof thumbnails actually load',
+  await page.evaluate(() => {
+    const img = document.querySelector('.card img[data-path]');
+    return Boolean(img && img.naturalWidth > 0);
+  }));
+await page.screenshot({ path: 'test/shots/04-review.png', fullPage: true });
+
+await page.click('[data-tab="/tasks"]');
+await page.waitForSelector('.task', { timeout: 5000 });
+check('task board renders task cards', (await page.locator('.task').count()) >= 2);
+await page.locator('.task').first().click();
+await page.waitForSelector('.sheet', { timeout: 5000 });
+check('task detail sheet opens', await page.locator('.sheet-head h2').isVisible());
+check('detail sheet shows the timeline', await page.locator('text=Timeline').isVisible());
+await page.waitForTimeout(400);   // let the slide-up animation settle
+check('sheet is fully opaque once open',
+  await page.evaluate(() => getComputedStyle(document.querySelector('.sheet')).opacity === '1'));
+await page.screenshot({ path: 'test/shots/05-task-detail.png' });
+await page.click('.sheet-head [data-close]');
+
+await page.click('[data-tab="/team"]');
+await page.waitForSelector('text=Your team', { timeout: 5000 });
+check('team roster renders', await page.locator('text=Add a team member').isVisible());
+
+await page.click('[data-tab="/me"]');
+await page.waitForSelector('text=Put this on your home screen', { timeout: 5000 });
+check('account screen explains home-screen install', true);
+await page.screenshot({ path: 'test/shots/06-account.png', fullPage: true });
+
+console.log('\nCrew app');
+identity = 'employee';
+await page.evaluate(() => { location.hash = '#/today'; });
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('.hero', { timeout: 8000 });
+check('crew member lands on Today',
+  (await page.locator('[data-tab="/today"]').getAttribute('class')).includes('active'));
+check('crew sees only three tabs (no manager tools)',
+  (await page.locator('[data-tab]').count()) === 3);
+check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test(await page.locator('.hero').innerText()));
+check('shows a "log a task" button', await page.locator('.fab').isVisible());
+await page.screenshot({ path: 'test/shots/08-today.png', fullPage: true });
+
+console.log('\nPhoto upload');
+const openTask = page.locator('.task').filter({ hasText: 'Restock the van' }).first();
+await openTask.click();
+await page.waitForSelector('.sheet', { timeout: 5000 });
+const chooser = page.waitForEvent('filechooser');
+await page.locator('.add-shot').first().click();
+const fc = await chooser;
+await fc.setFiles(path.join(PUBLIC, 'icons', 'icon-512.png'));
+// wait for the real round trip (resize -> storage -> row insert), not a placeholder
+for (let i = 0; i < 60 && uploadedRows === 0; i += 1) await page.waitForTimeout(250);
+await page.waitForFunction(() => document.querySelector('.gallery .shot img'), null, { timeout: 10000 })
+  .catch(() => {});
+check('photo uploaded to storage under the user folder',
+  uploadedPath.startsWith(`${USER_ID}/2/`), uploadedPath);
+check('photo was compressed to JPEG before upload',
+  uploadedPath.endsWith('.jpg') && uploadedBytes > 0 && uploadedBytes < 300_000, `${uploadedBytes} bytes`);
+check('photo row written to the database', uploadedRows >= 1);
+check('gallery shows the new photo', (await page.locator('.gallery .shot img').count()) >= 1);
+await page.screenshot({ path: 'test/shots/09-photo.png' });
+await page.click('.sheet-head [data-close]');
+
+await page.click('[data-tab="/history"]');
+await page.waitForSelector('text=Last 14 days', { timeout: 5000 });
+check('history view renders', true);
+
+console.log('\nPWA plumbing');
+const manifest = JSON.parse(fs.readFileSync(path.join(PUBLIC, 'manifest.webmanifest'), 'utf8'));
+check('manifest is standalone with maskable icons',
+  manifest.display === 'standalone' && manifest.icons.some((i) => i.purpose === 'maskable'));
+check('service worker is served', fs.existsSync(path.join(PUBLIC, 'sw.js')));
+const swReady = await page.evaluate(() =>
+  navigator.serviceWorker.ready.then(() => true).catch(() => false));
+check('service worker registers and activates', swReady);
+const cached = await page.evaluate(async () => {
+  const keys = await caches.keys();
+  const cache = await caches.open(keys.find((k) => k.startsWith('shell-')));
+  return (await cache.keys()).length;
+});
+check('app shell is precached for offline launch', cached >= 4, `${cached} files`);
+
+console.log('\nDark mode');
+const dark = await context.newPage();
+await dark.emulateMedia({ colorScheme: 'dark' });
+await dark.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
+await dark.waitForSelector('.tabbar', { timeout: 8000 });
+await dark.screenshot({ path: 'test/shots/07-dark.png', fullPage: true });
+check('dark mode renders', true);
+
+const realErrors = errors.filter((e) => !/realtime|websocket|Failed to load resource/i.test(e));
+check('no JavaScript errors', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
+
+await browser.close();
+server.close();
+
+console.log(failures.length ? `\n${failures.length} check(s) failed\n` : '\nAll checks passed\n');
+process.exit(failures.length ? 1 : 0);

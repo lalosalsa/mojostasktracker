@@ -1,0 +1,23 @@
+{
+  "name": "mojos-task-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Employee task tracker with photo proof. Static PWA on Vercel, data/auth/storage on Supabase.",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js --watch",
+    "start": "node scripts/build.js && npx --yes serve public -l 3000",
+    "icons": "node scripts/generate-icons.js",
+    "test": "node test/smoke.mjs",
+    "test:db": "bash test/run-db-tests.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.2"
+  }
+}
