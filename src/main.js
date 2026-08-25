@@ -4,7 +4,7 @@ import './ui.js';
 import { el, esc, toast, initials } from './ui.js';
 import { isConfigured, APP_NAME, BUILD_ID } from './config.js';
 import { sb, friendlyError } from './supabase.js';
-import { state, setState, subscribe, isManager } from './store.js';
+import { state, setState, subscribe, isManager, canCreateTeam } from './store.js';
 import { route, setNotFound, startRouter, navigate, parse, resolve } from './router.js';
 import * as data from './data.js';
 
@@ -18,6 +18,7 @@ import { teamView, } from './views/team.js';
 import { taskBoardView, openTaskEditor } from './views/tasksBoard.js';
 import { reportsView } from './views/reports.js';
 import { blocksView } from './views/blocks.js';
+import { openTeamSwitcher } from './views/teamSwitcher.js';
 
 /** Always resolve the live root — the shell is swapped out on sign-in/out, so
     a cached reference goes stale and later renders land in a detached tree. */
@@ -54,8 +55,12 @@ function buildShell() {
         </div>
         <span class="spacer"></span>
         <button class="appbar-btn" data-refresh title="Refresh">⟳</button>
+        <button class="appbar-btn team" data-teams title="Switch location">
+          <span class="name" data-teamname>${esc(state.team?.name || 'Location')}</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
         <button class="appbar-btn" data-profile title="Your account">
-          ${esc(initials(state.me?.name || state.me?.email))}
+          ${esc(initials(state.me?.name || state.account?.name || state.account?.email))}
         </button>
       </header>
       <div class="offline-bar" hidden data-offline>Offline — changes will need a connection to save</div>
@@ -66,6 +71,16 @@ function buildShell() {
     </div>`);
 
   node.querySelector('[data-refresh]').onclick = () => resolve();
+  node.querySelector('[data-teams]').onclick = () => openTeamSwitcher({
+    onSwitched: () => {
+      // a different location means different tabs, blocks and crew
+      shell = buildShell();
+      registerRoutes();
+      paintChrome();
+      navigate(isManager() ? '/dashboard' : '/today', { replace: true });
+      resolve();
+    },
+  });
   node.querySelector('[data-profile]').onclick = () => navigate('/me');
   node.querySelectorAll('[data-tab]').forEach((b) => {
     b.onclick = () => navigate(b.dataset.tab);
@@ -94,9 +109,16 @@ function paintChrome() {
     '/blocks': "The day's blocks",
   };
   shell.querySelector('[data-title]').textContent = titles[path] || state.team?.name || APP_NAME;
-  const name = state.me?.name || state.me?.email || '';
+  const name = state.me?.name || state.account?.name || '';
   shell.querySelector('[data-sub]').textContent =
     isManager() ? `${name} · Manager` : `${name}${state.team ? ` · ${state.team.name}` : ''}`;
+
+  const teamBtn = shell.querySelector('[data-teams]');
+  if (teamBtn) {
+    teamBtn.querySelector('[data-teamname]').textContent = state.team?.name || 'Location';
+    // only worth showing once there is somewhere to switch to, or something to add
+    teamBtn.hidden = (state.teams?.length || 0) < 2 && !canCreateTeam();
+  }
   shell.querySelector('[data-offline]').hidden = state.online;
 }
 
@@ -173,22 +195,32 @@ async function onSignedIn(session) {
     return errorView(root(), friendlyError(err), () => location.reload());
   }
 
-  if (!identity?.member) {
+  if (!identity?.account) {
     return errorView(
       root(),
       'Your account was created but its record is missing. Re-run the setup SQL in Supabase, then try again.',
       () => location.reload()
     );
   }
-  setState({ me: identity.member, team: identity.team });
+  setState({
+    account: identity.account,
+    me: identity.member,
+    team: identity.team,
+    teams: identity.teams || [],
+  });
 
-  if (identity.member.status === 'disabled') return disabledView(root());
+  if (identity.member?.status === 'disabled') return disabledView(root());
 
   // Signed up but not on a team yet: create one or join with a code.
-  if (!identity.member.team_id) {
+  if (!identity.member?.team_id) {
     mountedUserId = null;
-    return teamSetupView(root(), identity.member, (joined) => {
-      setState({ me: joined.member, team: joined.team });
+    return teamSetupView(root(), identity.account, (joined) => {
+      setState({
+        account: joined.account,
+        me: joined.member,
+        team: joined.team,
+        teams: joined.teams || [],
+      });
       mountShell(session);
     });
   }
@@ -213,7 +245,7 @@ async function mountShell(session) {
 function onSignedOut() {
   realtimeChannel?.unsubscribe();
   realtimeChannel = null;
-  setState({ session: null, me: null, team: null });
+  setState({ session: null, account: null, me: null, team: null, teams: [] });
   shell = null;
   mountedUserId = null;
   signInView(root());

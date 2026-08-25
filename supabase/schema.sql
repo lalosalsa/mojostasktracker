@@ -4,9 +4,13 @@
 --  Sign-up model:
 --    · Everyone signs up with their name, email and a password. No emails are
 --      sent at all (turn OFF "Confirm email" in Supabase — see SETUP.md).
---    · A manager then creates a team and gets two codes to share.
+--    · A manager then creates a team (a location) and gets two codes to share.
 --    · Employees join that team by typing the code.
 --    · Coming back later is the same email + password.
+--
+--  One account can belong to several teams — a manager running three shops has
+--  a membership in each and switches between them. Everything else in this file
+--  is scoped to whichever one is active, so the rest of the rules are unchanged.
 --
 --  The work itself is a shared list: the manager names time blocks ("Morning
 --  Prep", "Closing") and fills each with tasks. Every morning those become that
@@ -32,12 +36,23 @@ create table if not exists public.teams (
   created_at   timestamptz not null default now()
 );
 
--- A person. Created automatically the first time they verify their email.
--- team_id stays null until they create a team or join one with a code.
+-- The person, one row per sign-in account. Their memberships live below.
+create table if not exists public.accounts (
+  id             uuid primary key references auth.users(id) on delete cascade,
+  email          text not null,
+  name           text not null default '',
+  active_team_id uuid references public.teams(id) on delete set null,
+  created_at     timestamptz not null default now()
+);
+
+-- One membership: this person, on this team. A manager with three locations has
+-- three of these. Tasks and photos point at the membership, so each location
+-- keeps its own history.
 create table if not exists public.members (
-  id           uuid primary key references auth.users(id) on delete cascade,
+  id           uuid primary key default gen_random_uuid(),
+  account_id   uuid not null references public.accounts(id) on delete cascade,
   team_id      uuid references public.teams(id) on delete set null,
-  email        text not null,
+  email        text not null default '',
   name         text not null default '',
   role         text not null default 'employee' check (role in ('employee', 'manager')),
   status       text not null default 'active'
@@ -47,7 +62,37 @@ create table if not exists public.members (
   created_at   timestamptz not null default now(),
   last_seen_at timestamptz
 );
-create index if not exists members_team_idx on public.members (team_id);
+
+-- Upgrade from the one-team-per-account shape without losing anything: back
+-- then members.id *was* the auth user id, and everything already points at it,
+-- so the row keeps its id and simply gains an account_id.
+do $migrate$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'members' and column_name = 'account_id'
+  ) then
+    alter table public.members add column account_id uuid;
+
+    insert into public.accounts (id, email, name, active_team_id)
+    select m.id, m.email, m.name, m.team_id from public.members m
+    on conflict (id) do nothing;
+
+    update public.members set account_id = id where account_id is null;
+
+    alter table public.members drop constraint if exists members_id_fkey;
+    alter table public.members alter column account_id set not null;
+    alter table public.members
+      add constraint members_account_id_fkey
+      foreign key (account_id) references public.accounts(id) on delete cascade;
+  end if;
+end
+$migrate$;
+
+create index if not exists members_team_idx    on public.members (team_id);
+create index if not exists members_account_idx on public.members (account_id);
+create unique index if not exists members_one_per_team_idx
+  on public.members (account_id, team_id) where team_id is not null;
 
 -- A named part of the working day: "Morning Prep", "Lunch Rush", "Closing".
 -- Times are optional — the name is what the crew reads.
@@ -169,20 +214,31 @@ returns text language sql immutable as $$
   select upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
 $$;
 
+/** The membership this session is working through — the active team's one. */
+create or replace function public.my_membership()
+returns public.members language sql stable security definer set search_path = public as $$
+  select m.* from public.members m
+    join public.accounts a on a.id = m.account_id
+   where m.account_id = auth.uid()
+     and m.status = 'active'
+     and m.team_id is not null
+     and m.team_id = a.active_team_id
+   limit 1;
+$$;
+
 create or replace function public.me()
-returns uuid language sql stable as $$ select auth.uid(); $$;
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.my_membership();
+$$;
 
 create or replace function public.my_team()
 returns uuid language sql stable security definer set search_path = public as $$
-  select team_id from public.members where id = auth.uid() and status = 'active';
+  select team_id from public.my_membership();
 $$;
 
 create or replace function public.is_manager()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from public.members
-     where id = auth.uid() and role = 'manager' and status = 'active' and team_id is not null
-  );
+  select coalesce((select role from public.my_membership()) = 'manager', false);
 $$;
 
 /** True for a manager, and for server-side work with no JWT at all (the SQL
@@ -194,19 +250,22 @@ $$;
 
 create or replace function public.my_name()
 returns text language sql stable security definer set search_path = public as $$
-  select coalesce(nullif(name, ''), email, 'Someone') from public.members where id = auth.uid();
+  select coalesce(nullif(m.name, ''), nullif(a.name, ''), a.email, 'Someone')
+    from public.accounts a
+    left join public.members m on m.id = public.me()
+   where a.id = auth.uid();
 $$;
 
 -- =============================================================================
---  SIGN UP / CREATE A TEAM / JOIN A TEAM
---  Verifying the emailed code creates the auth user; the trigger below turns
---  that into a member row. Team membership is a second, separate step.
+--  SIGN UP / TEAMS / SWITCHING BETWEEN THEM
+--  Signing up creates the account. Teams are joined or created afterwards, and
+--  one account can hold several — the active one decides what the app shows.
 -- =============================================================================
 
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.members (id, email, name)
+  insert into public.accounts (id, email, name)
   values (
     new.id,
     lower(new.email),
@@ -224,49 +283,114 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
-/** Whoever is signed in on this device, plus their team if they have one. */
+/** Every team this account belongs to, for the switcher. */
+create or replace function public.my_teams()
+returns table (
+  team_id uuid, name text, role text, is_active boolean,
+  join_code text, manager_code text, crew_count bigint
+) language sql stable security definer set search_path = public as $$
+  select t.id, t.name, m.role, t.id = a.active_team_id,
+         case when m.role = 'manager' then t.join_code end,
+         case when m.role = 'manager' then t.manager_code end,
+         (select count(*) from public.members x
+           where x.team_id = t.id and x.status = 'active')
+    from public.members m
+    join public.teams t   on t.id = m.team_id
+    join public.accounts a on a.id = m.account_id
+   where m.account_id = auth.uid() and m.status = 'active'
+   order by t.name;
+$$;
+
+/** Whoever is signed in, which team they're looking at, and what else they run. */
 create or replace function public.whoami()
 returns json language plpgsql security definer set search_path = public as $$
 declare
-  v_member public.members;
-  v_team   public.teams;
+  v_account public.accounts;
+  v_member  public.members;
+  v_team    public.teams;
 begin
-  select * into v_member from public.members where id = auth.uid();
+  select * into v_account from public.accounts where id = auth.uid();
   if not found then return null; end if;
 
-  update public.members set last_seen_at = now() where id = v_member.id;
-  if v_member.team_id is not null then
+  -- fall back to any team they belong to if none is marked active
+  if v_account.active_team_id is null then
+    update public.accounts set active_team_id = (
+      select m.team_id from public.members m
+       where m.account_id = auth.uid() and m.status = 'active' and m.team_id is not null
+       order by m.created_at limit 1
+    ) where id = auth.uid()
+    returning * into v_account;
+  end if;
+
+  select * into v_member from public.my_membership();
+  if found then
+    update public.members set last_seen_at = now() where id = v_member.id;
     select * into v_team from public.teams where id = v_member.team_id;
   end if;
 
   return json_build_object(
-    'member', row_to_json(v_member),
-    'team', case when v_team.id is null then null else row_to_json(v_team) end
+    'account', row_to_json(v_account),
+    'member',  case when v_member.id is null then null else row_to_json(v_member) end,
+    'team',    case when v_team.id   is null then null else row_to_json(v_team)   end,
+    'teams',   coalesce((select json_agg(t) from public.my_teams() t), '[]'::json)
   );
 end $$;
 
-/** Save the name typed on the sign-up screen. */
+/** Keeps the name consistent everywhere this person works. */
 create or replace function public.set_my_name(p_name text)
 returns json language plpgsql security definer set search_path = public as $$
 begin
-  update public.members set name = left(trim(p_name), 80)
-   where id = auth.uid() and coalesce(trim(p_name), '') <> '';
+  if coalesce(trim(p_name), '') = '' then return public.whoami(); end if;
+
+  update public.accounts set name = left(trim(p_name), 80) where id = auth.uid();
+
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members set name = left(trim(p_name), 80) where account_id = auth.uid();
+  perform set_config('app.member_guard_bypass', '0', true);
+
   return public.whoami();
 end $$;
 
-/** A manager starts a team and gets the two codes to share. */
+/** Point this session at one of the teams they belong to. */
+create or replace function public.switch_team(p_team_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (
+    select 1 from public.members
+     where account_id = auth.uid() and team_id = p_team_id and status = 'active'
+  ) then
+    raise exception 'You are not on that team';
+  end if;
+  update public.accounts set active_team_id = p_team_id where id = auth.uid();
+  return public.whoami();
+end $$;
+
+/**
+ * Start a team. A manager running several locations calls this once per
+ * location; the new one becomes the active team.
+ *
+ * Who may: anyone with no team yet (that is how you become a manager in the
+ * first place), and anyone already managing a team. A crew member cannot spin
+ * up locations — they join with the code their manager gives them.
+ */
 create or replace function public.create_team(p_team_name text, p_your_name text default '')
 returns json language plpgsql security definer set search_path = public as $$
 declare
-  v_team   public.teams;
-  v_member public.members;
+  v_team    public.teams;
+  v_account public.accounts;
+  v_member  public.members;
 begin
-  select * into v_member from public.members where id = auth.uid();
+  select * into v_account from public.accounts where id = auth.uid();
   if not found then raise exception 'Finish signing up first'; end if;
-  if v_member.team_id is not null and v_member.status <> 'removed' then
-    raise exception 'You are already on a team. Leave it before starting another.';
-  end if;
   if coalesce(trim(p_team_name), '') = '' then raise exception 'Give your team a name'; end if;
+
+  if exists (select 1 from public.members
+              where account_id = auth.uid() and status = 'active' and team_id is not null)
+     and not exists (select 1 from public.members
+                      where account_id = auth.uid() and status = 'active' and role = 'manager')
+  then
+    raise exception 'Only managers can start a team. Ask your manager for a code to join theirs.';
+  end if;
 
   loop
     begin
@@ -279,35 +403,34 @@ begin
     end;
   end loop;
 
-  perform set_config('app.member_guard_bypass', '1', true);
-  update public.members
-     set team_id   = v_team.id,
-         role      = 'manager',
-         name      = coalesce(nullif(trim(p_your_name), ''), nullif(name, ''), split_part(email, '@', 1)),
-         job_title = coalesce(nullif(job_title, ''), 'Manager')
-   where id = auth.uid();
-  perform set_config('app.member_guard_bypass', '0', true);
+  insert into public.members (account_id, team_id, email, name, role, status, job_title)
+  values (auth.uid(), v_team.id, v_account.email,
+          coalesce(nullif(trim(p_your_name), ''), nullif(v_account.name, ''),
+                   split_part(v_account.email, '@', 1)),
+          'manager', 'active', 'Manager')
+  returning * into v_member;
+
+  update public.accounts set active_team_id = v_team.id where id = auth.uid();
 
   insert into public.activity (team_id, actor_id, actor_name, type, detail)
-  values (v_team.id, v_member.id, public.my_name(), 'team.created', v_team.name);
+  values (v_team.id, v_member.id, v_member.name, 'team.created', v_team.name);
 
   return public.whoami();
 end $$;
 
-/** Join the team a manager shared a code for. */
+/** Join a team with the code its manager shared. Adds a membership; any teams
+    already joined are untouched. */
 create or replace function public.join_team(p_code text, p_your_name text default '')
 returns json language plpgsql security definer set search_path = public as $$
 declare
-  v_code   text := public.normalize_code(p_code);
-  v_team   public.teams;
-  v_role   text;
-  v_member public.members;
+  v_code    text := public.normalize_code(p_code);
+  v_team    public.teams;
+  v_role    text;
+  v_account public.accounts;
+  v_member  public.members;
 begin
-  select * into v_member from public.members where id = auth.uid();
+  select * into v_account from public.accounts where id = auth.uid();
   if not found then raise exception 'Finish signing up first'; end if;
-  if v_member.team_id is not null and v_member.status <> 'removed' then
-    raise exception 'You are already on a team.';
-  end if;
 
   select * into v_team from public.teams
    where join_code = v_code or manager_code = v_code;
@@ -317,25 +440,36 @@ begin
   end if;
   v_role := case when v_team.manager_code = v_code then 'manager' else 'employee' end;
 
-  perform set_config('app.member_guard_bypass', '1', true);
-  update public.members
-     set team_id = v_team.id,
-         role    = v_role,
-         status  = 'active',
-         name    = coalesce(nullif(trim(p_your_name), ''), nullif(name, ''), split_part(email, '@', 1))
-   where id = auth.uid();
-  perform set_config('app.member_guard_bypass', '0', true);
+  select * into v_member from public.members
+   where account_id = auth.uid() and team_id = v_team.id;
 
-  insert into public.activity (team_id, actor_id, actor_name, type, detail)
-  values (v_team.id, v_member.id, public.my_name(), 'member.joined', public.my_name());
+  if found then
+    if v_member.status = 'removed' then
+      perform set_config('app.member_guard_bypass', '1', true);
+      update public.members set status = 'active', role = v_role
+       where id = v_member.id returning * into v_member;
+      perform set_config('app.member_guard_bypass', '0', true);
+    end if;
+  else
+    insert into public.members (account_id, team_id, email, name, role, status)
+    values (auth.uid(), v_team.id, v_account.email,
+            coalesce(nullif(trim(p_your_name), ''), nullif(v_account.name, ''),
+                     split_part(v_account.email, '@', 1)),
+            v_role, 'active')
+    returning * into v_member;
 
+    insert into public.activity (team_id, actor_id, actor_name, type, detail)
+    values (v_team.id, v_member.id, v_member.name, 'member.joined', v_member.name);
+  end if;
+
+  update public.accounts set active_team_id = v_team.id where id = auth.uid();
   return public.whoami();
 end $$;
 
-/** Step away from a team (a manager cannot strand it — hand over first). */
+/** Step away from the team you're currently looking at. */
 create or replace function public.leave_team()
 returns json language plpgsql security definer set search_path = public as $$
-declare v_team uuid := public.my_team();
+declare v_team uuid := public.my_team(); v_member uuid := public.me();
 begin
   if v_team is null then return public.whoami(); end if;
   if public.is_manager() and (
@@ -343,9 +477,17 @@ begin
         where team_id = v_team and role = 'manager' and status = 'active') <= 1 then
     raise exception 'You are the only manager. Make someone else a manager first.';
   end if;
+
   perform set_config('app.member_guard_bypass', '1', true);
-  update public.members set team_id = null, role = 'employee' where id = auth.uid();
+  delete from public.members where id = v_member;
   perform set_config('app.member_guard_bypass', '0', true);
+
+  update public.accounts set active_team_id = (
+    select m.team_id from public.members m
+     where m.account_id = auth.uid() and m.status = 'active' and m.team_id is not null
+     order by m.created_at limit 1
+  ) where id = auth.uid();
+
   return public.whoami();
 end $$;
 
@@ -376,14 +518,14 @@ begin
   return row_to_json(v_team);
 end $$;
 
-/** Take someone off the team. Their finished work and photos stay, so the
-    manager keeps the history; the person loses all access immediately and can
-    join another team (or be re-added) with a code. */
+/** Take someone off this team. Their finished work and photos stay, so the
+    manager keeps the history; the person loses access to this location only —
+    any other team they belong to is untouched. */
 create or replace function public.remove_member(p_member_id uuid)
 returns void language plpgsql security definer set search_path = public as $$
 begin
   if not public.is_manager() then raise exception 'Managers only'; end if;
-  if p_member_id = auth.uid() then raise exception 'You cannot remove yourself'; end if;
+  if p_member_id = public.me() then raise exception 'You cannot remove yourself'; end if;
   if not exists (select 1 from public.members
                   where id = p_member_id and team_id = public.my_team()) then
     raise exception 'That person is not on your team';
@@ -393,7 +535,6 @@ begin
   update public.members set status = 'removed', role = 'employee' where id = p_member_id;
   perform set_config('app.member_guard_bypass', '0', true);
 
-  -- hand their unfinished work back to the pool
   -- anything they hadn't finished goes back to the shared list
   update public.tasks set assigned_to = null
    where assigned_to = p_member_id and status in ('open', 'in_progress', 'rejected');
@@ -559,6 +700,7 @@ create trigger photos_activity_trg after insert on public.task_photos
 --  ROW LEVEL SECURITY — everything is scoped to your own team
 -- =============================================================================
 
+alter table public.accounts       enable row level security;
 alter table public.teams          enable row level security;
 alter table public.members        enable row level security;
 alter table public.tasks          enable row level security;
@@ -567,19 +709,31 @@ alter table public.blocks         enable row level security;
 alter table public.block_items    enable row level security;
 alter table public.activity       enable row level security;
 
--- teams: you can read your own team. Codes change only through the RPCs above.
+-- accounts: only ever your own
+drop policy if exists accounts_select on public.accounts;
+create policy accounts_select on public.accounts for select to authenticated
+  using (id = auth.uid());
+
+drop policy if exists accounts_update on public.accounts;
+create policy accounts_update on public.accounts for update to authenticated
+  using (id = auth.uid()) with check (id = auth.uid());
+
+-- teams: any team you belong to. Codes change only through the RPCs above.
 drop policy if exists teams_select on public.teams;
 create policy teams_select on public.teams for select to authenticated
-  using (id = public.my_team());
+  using (exists (
+    select 1 from public.members m
+     where m.team_id = public.teams.id and m.account_id = auth.uid() and m.status = 'active'
+  ));
 
 -- members
 drop policy if exists members_select on public.members;
 create policy members_select on public.members for select to authenticated
-  using (id = auth.uid() or (team_id is not null and team_id = public.my_team()));
+  using (account_id = auth.uid() or (team_id is not null and team_id = public.my_team()));
 
 drop policy if exists members_update_self on public.members;
 create policy members_update_self on public.members for update to authenticated
-  using (id = public.me()) with check (id = public.me());
+  using (account_id = auth.uid()) with check (account_id = auth.uid());
 
 drop policy if exists members_manager on public.members;
 create policy members_manager on public.members for all to authenticated
@@ -814,6 +968,7 @@ $$;
 -- =============================================================================
 
 grant usage on schema public to anon, authenticated;
+grant select, update on public.accounts to authenticated;
 grant select, insert, update, delete on
   public.tasks, public.task_photos, public.members,
   public.blocks, public.block_items to authenticated;
@@ -823,6 +978,9 @@ alter default privileges in schema public grant usage, select on sequences to au
 
 grant execute on function public.whoami()                              to authenticated;
 grant execute on function public.set_my_name(text)                     to authenticated;
+grant execute on function public.my_teams()                            to authenticated;
+grant execute on function public.my_membership()                       to authenticated;
+grant execute on function public.switch_team(uuid)                     to authenticated;
 grant execute on function public.create_team(text, text)               to authenticated;
 grant execute on function public.join_team(text, text)                 to authenticated;
 grant execute on function public.leave_team()                          to authenticated;

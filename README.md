@@ -7,7 +7,9 @@ photo that proves it and has their name recorded against it. The manager sees it
 all live and signs off on the proof.
 
 A manager creates a team and shares a 6-character code; the crew signs up with
-their name and email, types the code, and they're in.
+their name and email, types the code, and they're in. Running more than one
+shop? Each location is its own team with its own crew, blocks and history, and
+you switch between them from the top right.
 
 Installs to a phone's home screen and opens like a normal app — no app store,
 no passwords to remember.
@@ -30,6 +32,10 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 - Everyone else joins by typing that code. Coming back on any device is the same
   email and password.
 - Teams are sealed off from each other: no code, no access.
+- One account, several locations. A manager can start as many as they need; crew
+  can be on more than one too, joining each with its code. Only managers can
+  create a location — crew join with a code. The switcher next to your profile
+  icon shows everywhere you work and which one you're looking at.
 
 **For the crew**
 
@@ -81,8 +87,11 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 
 Every rule lives in Postgres, so a tampered client cannot get around it:
 
-- Row level security scopes everything to your own team first, then to your own
-  tasks and photos; a manager sees their whole team and nothing beyond it.
+- Row level security scopes everything to the team you're currently in, then to
+  your own tasks and photos. Switching locations changes what you can see, and
+  the database enforces it — you cannot switch to a team you don't belong to.
+- Each location gets a separate membership row, so your history at one shop never
+  mixes with another.
 - Photos live in a **private** storage bucket, served through short-lived signed
   URLs. Files are laid out as `<user-id>/<task-id>/<file>` and storage policies
   keep people out of each other's folders.
@@ -122,8 +131,9 @@ shell. Screenshots land in `test/shots/`.
 
 `npm run test:db` needs PostgreSQL 16 installed locally. It proves the schema
 applies cleanly (twice — it's idempotent) and then checks the rules that matter:
-one team cannot see another team's blocks, tasks, members or photos; a wrong
-code is refused; the day's list builds exactly once; the crew can't edit the
+one team cannot see another team's blocks, tasks, members or photos; a manager
+with two locations sees only the active one and the same membership comes back
+when they switch; crew cannot start a location; a wrong code is refused; the day's list builds exactly once; the crew can't edit the
 blocks; finishing a task records who did it and reopening clears it; nobody can
 finish without a photo, verify themselves, or promote themselves; and the last
 manager can't strand a team.

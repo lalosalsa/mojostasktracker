@@ -13,9 +13,12 @@ select public.create_team('Mojo Services', 'Sam Boss') -> 'team' ->> 'name' as t
 select join_code from public.teams \gset
 set request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
 select public.join_team(:'join_code', 'Jose Perez') -> 'member' ->> 'role' as r1;
+select public.me() as jose \gset
 set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
 select public.join_team(:'join_code', 'Mia Ruiz') -> 'member' ->> 'role' as r2;
+select public.me() as mia \gset
 set request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+select public.me() as sam \gset
 
 \echo '--- 1. the manager names the blocks of the day'
 insert into public.blocks (team_id, name, starts_at, ends_at, position, created_by) values
@@ -55,7 +58,7 @@ select count(*) as mia_sees from public.tasks;
 set request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
 select id as t1 from public.tasks where title = 'Mop the floor' \gset
 insert into public.task_photos (task_id, member_id, storage_path)
-values (:t1, '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222/1/p.jpg');
+values (:t1, public.me(), public.me()::text || '/1/p.jpg');
 select status from public.complete_task(:t1, 'Done, floor was bad today');
 select t.title, m.name as completed_by, t.status
   from public.tasks t join public.members m on m.id = t.completed_by where t.id = :t1;
@@ -64,7 +67,7 @@ select t.title, m.name as completed_by, t.status
 set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
 select id as t2 from public.tasks where title = 'Take out the trash' \gset
 insert into public.task_photos (task_id, member_id, storage_path)
-values (:t2, '33333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333/1/p.jpg');
+values (:t2, public.me(), public.me()::text || '/1/p.jpg');
 select status from public.complete_task(:t2);
 set request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
 select b.name as block, t.title, coalesce(m.name, '—') as done_by, t.status
@@ -141,7 +144,7 @@ insert into public.task_photos (task_id, member_id, storage_path)
 values (:shared_task, public.me(), public.me()::text || '/9/shared.jpg')
 returning id as photo_row_returned;
 select count(*) as mia_can_see_her_photo from public.task_photos
- where member_id = '33333333-3333-3333-3333-333333333333';
+ where member_id = public.me();
 
 \echo '--- 14. photo files: crew upload to their own folder, manager can see them'
 reset role;
@@ -167,7 +170,7 @@ set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
 \echo '    (writing into a teammate''s folder must fail — expect an error next)'
 \set ON_ERROR_STOP off
 insert into storage.objects (bucket_id, name, owner)
-values ('task-photos', '22222222-2222-2222-2222-222222222222/1/sneaky.jpg', public.me());
+values ('task-photos', :'jose' || '/1/sneaky.jpg', public.me());
 \set ON_ERROR_STOP on
 
 \echo '--- 15. another team sees none of these blocks'

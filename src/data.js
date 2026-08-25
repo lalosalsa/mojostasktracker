@@ -46,7 +46,7 @@ export async function whoami() {
 export async function waitForMe(tries = 6) {
   for (let i = 0; i < tries; i += 1) {
     const identity = await whoami();
-    if (identity?.member) return identity;
+    if (identity?.account) return identity;
     await new Promise((r) => setTimeout(r, 300 + i * 250));
   }
   return null;
@@ -94,6 +94,12 @@ export const sendPasswordReset = async (email) => {
 
 export const createTeam = (teamName, yourName) =>
   sb().rpc('create_team', { p_team_name: teamName, p_your_name: yourName || '' }).then(unwrap);
+
+/** Every team this account belongs to, for the switcher. */
+export const myTeams = async () => unwrap(await sb().rpc('my_teams')) || [];
+
+export const switchTeam = (teamId) =>
+  sb().rpc('switch_team', { p_team_id: teamId }).then(unwrap);
 
 export const joinTeam = (code, yourName) =>
   sb().rpc('join_team', { p_code: code, p_your_name: yourName || '' }).then(unwrap);

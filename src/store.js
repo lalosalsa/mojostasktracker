@@ -5,8 +5,10 @@ const listeners = new Set();
 export const state = {
   ready: false,
   session: null,
-  me: null,      // the signed-in member row
-  team: null,    // their team, once they have one
+  account: null, // the person signed in on this device
+  me: null,      // their membership of the team they're looking at
+  team: null,    // that team
+  teams: [],     // every team they belong to
   route: '',
   online: navigator.onLine,
   pendingUploads: 0,
@@ -32,3 +34,6 @@ export function emit() {
 export const isManager = () => state.me?.role === 'manager' && state.me?.status === 'active';
 export const isActive = () => state.me?.status === 'active';
 export const hasTeam = () => Boolean(state.me?.team_id);
+/** You can start a location if you run one already, or have none at all. */
+export const canCreateTeam = () =>
+  !state.teams.length || state.teams.some((t) => t.role === 'manager');

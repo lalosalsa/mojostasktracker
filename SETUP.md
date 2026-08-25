@@ -151,7 +151,23 @@ Tell each person to open the link in their phone browser and:
 It then opens full-screen from the home screen icon, like any other app, and
 stays signed in.
 
-## 11. Build the day
+## 11. More than one location (optional)
+
+If you run several shops, each one is its own team: its own crew, its own blocks,
+its own history. Nothing is shared between them.
+
+Tap the location name in the **top right**, next to your profile icon:
+
+- **Add another location** — name it and you're its manager, with a fresh crew
+  code to hand out. (Only managers see this. Crew join with a code.)
+- **Join a team with a code** — for a location someone else runs.
+- Tap any location in the list to switch to it. The whole app follows: today's
+  list, the blocks, the crew, the reports.
+
+Someone who works at two of your shops joins each one with its code and switches
+the same way. Their work at each stays separate.
+
+## 12. Build the day
 
 This is the part that makes the app yours.
 
@@ -210,8 +226,12 @@ it, remove them under Team and have them sign up again.
 easily-confused letters (no O, I or L — those are zero, one and one). Read it
 off the Team screen and re-send it.
 
-**Someone joined the wrong team.** They can leave from **Me → Leave team**, then
-join again with the right code.
+**Someone joined the wrong team.** They can switch or leave from the location
+button in the top right.
+
+**A manager can't add a location.** Only someone who already manages a team can
+create another. If they're crew everywhere, give them the manager code for one of
+your locations first.
 
 **Screens error out right after signing in.** The database tables aren't there —
 run `supabase/schema.sql` (step 2).

@@ -104,6 +104,13 @@ a { color: var(--brand); }
   font-size: 13px; font-weight: 600;
 }
 .appbar-btn:active { background: rgba(255, 255, 255, .3); }
+/* the location switcher: one line, never wide enough to squeeze the title */
+.appbar-btn.team { max-width: 124px; padding: 0 9px; gap: 4px; }
+.appbar-btn.team .name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.appbar-btn.team .caret { font-size: 10px; opacity: .8; flex: none; }
+@media (max-width: 380px) { .appbar-btn.team { max-width: 92px; } }
 
 .view {
   flex: 1;

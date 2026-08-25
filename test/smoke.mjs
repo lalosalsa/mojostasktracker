@@ -34,8 +34,12 @@ await new Promise((r) => server.listen(PORT, r));
 
 /* ------------------------------------------------------------- fake backend */
 const USER_ID = '11111111-1111-1111-1111-111111111111';
-const TEAM = { id: 'aaaaaaaa-0000-0000-0000-000000000001', name: 'Mojo Services',
+const TEAM = { id: 'aaaaaaaa-0000-0000-0000-000000000001', name: 'Mojo Downtown',
   join_code: 'K7P2QX', manager_code: 'M4RT9B', created_at: '2026-01-01T00:00:00Z' };
+const TEAM2 = { id: 'aaaaaaaa-0000-0000-0000-000000000002', name: 'Mojo Airport',
+  join_code: 'H3N8VD', manager_code: 'Q9WKTM', created_at: '2026-01-01T00:00:00Z' };
+const ACCOUNT = { id: USER_ID, email: 'boss@mojo.test', name: 'Sam Boss',
+  active_team_id: TEAM.id, created_at: '2026-01-01T00:00:00Z' };
 const profile = {
   id: USER_ID, team_id: TEAM.id, email: 'boss@mojo.test', name: 'Sam Boss', role: 'manager',
   status: 'active', job_title: 'Manager', phone: '', created_at: '2026-01-01T00:00:00Z',
@@ -98,6 +102,7 @@ const context = await browser.newContext({
 });
 
 let addedItem = null;
+let switchedTo = null;
 let identity = 'manager';
 let hasTeam = true;
 let createdTeamName = '';
@@ -109,7 +114,21 @@ const who = () => {
   const base = identity === 'manager' ? profile : { ...employee, id: USER_ID };
   return hasTeam ? base : { ...base, team_id: null, role: 'employee' };
 };
-const identityPayload = () => ({ member: who(), team: hasTeam ? TEAM : null });
+const activeTeam = () => (switchedTo === TEAM2.id ? TEAM2 : TEAM);
+const identityPayload = () => ({
+  account: { ...ACCOUNT, active_team_id: hasTeam ? activeTeam().id : null },
+  member: who(),
+  team: hasTeam ? activeTeam() : null,
+  teams: hasTeam ? [
+    { team_id: TEAM.id, name: TEAM.name, role: identity === 'manager' ? 'manager' : 'employee',
+      is_active: activeTeam().id === TEAM.id, join_code: TEAM.join_code,
+      manager_code: TEAM.manager_code, crew_count: 3 },
+    { team_id: TEAM2.id, name: TEAM2.name, role: identity === 'manager' ? 'manager' : 'employee',
+      is_active: activeTeam().id === TEAM2.id,
+      join_code: identity === 'manager' ? TEAM2.join_code : null,
+      manager_code: identity === 'manager' ? TEAM2.manager_code : null, crew_count: 1 },
+  ] : [],
+});
 await context.route(`${SUPA}/**`, async (route) => {
   const url = route.request().url();
   const method = route.request().method();
@@ -132,6 +151,11 @@ await context.route(`${SUPA}/**`, async (route) => {
   }
   if (url.includes('/auth/v1/user')) return json(route, profile);
   if (url.includes('/rest/v1/rpc/whoami')) return json(route, identityPayload());
+  if (url.includes('/rest/v1/rpc/my_teams')) return json(route, identityPayload().teams);
+  if (url.includes('/rest/v1/rpc/switch_team')) {
+    switchedTo = JSON.parse(route.request().postData() || '{}').p_team_id;
+    return json(route, identityPayload());
+  }
   if (url.includes('/rest/v1/blocks')) return json(route, BLOCKS);
   if (url.includes('/rest/v1/block_items')) {
     if (method === 'POST') {
@@ -146,6 +170,7 @@ await context.route(`${SUPA}/**`, async (route) => {
     hasTeam = true;
     return json(route, identityPayload());
   }
+  if (url.includes('/rest/v1/accounts')) return json(route, ACCOUNT);
   if (url.includes('/rest/v1/rpc/join_team')) {
     joinedWithCode = JSON.parse(route.request().postData() || '{}').p_code || '';
     hasTeam = true;
@@ -374,9 +399,51 @@ await page.waitForSelector('text=Put this on your home screen', { timeout: 5000 
 check('account screen explains home-screen install', true);
 await page.screenshot({ path: 'test/shots/09-account.png', fullPage: true });
 
+console.log('\nLocations');
+const switcher = page.locator('[data-teams]');
+check('the switcher sits in the top right, by the profile icon', await switcher.isVisible());
+check('it shows which location you are looking at',
+  (await switcher.innerText()).includes('Mojo Downtown'));
+
+await switcher.click();
+await page.waitForSelector('text=Your locations', { timeout: 5000 });
+const sheetText = await page.locator('.sheet-body').innerText();
+check('both locations are listed', sheetText.includes('Mojo Downtown') && sheetText.includes('Mojo Airport'));
+check('the current one is marked', sheetText.includes('Here now'));
+check('each shows your role and crew size', sheetText.includes('Manager') && sheetText.includes('3 people'));
+check('a manager can add another location', sheetText.includes('Add another location'));
+check('and can join one with a code', sheetText.includes('Join a team with a code'));
+
+const bar = await page.evaluate(() => {
+  const btn = document.querySelector('[data-teams]');
+  const title = document.querySelector('[data-title]');
+  return {
+    oneLine: btn.getBoundingClientRect().height < 46,
+    leavesRoomForTitle: title.getBoundingClientRect().width > 90,
+  };
+});
+check('the switcher stays on one line', bar.oneLine);
+check('and leaves the screen title room', bar.leavesRoomForTitle);
+await page.waitForTimeout(400);
+await page.screenshot({ path: 'test/shots/17-locations.png' });
+
+await page.locator('.sheet-body .list-row', { hasText: 'Mojo Airport' }).click();
+await page.waitForTimeout(1200);
+check('tapping a location switches to it', switchedTo === TEAM2.id);
+check('the header follows you there',
+  (await page.locator('[data-teams]').innerText()).includes('Mojo Airport'));
+await page.screenshot({ path: 'test/shots/18-switched.png', fullPage: true });
+
+// back to the first one for the rest of the run
+await page.locator('[data-teams]').click();
+await page.waitForSelector('text=Your locations', { timeout: 5000 });
+await page.locator('.sheet-body .list-row', { hasText: 'Mojo Downtown' }).click();
+await page.waitForTimeout(1200);
+
 console.log('\nBlocks');
 await page.click('[data-tab="/blocks"]');
-await page.waitForSelector('text=Morning Prep', { timeout: 5000 });
+// the intro banner names the blocks too, so wait for a real block card
+await page.waitForSelector('button:has-text("Add a task to")', { timeout: 8000 });
 const blocksText = await page.locator('#view').innerText();
 check('lists the named blocks of the day',
   blocksText.includes('Morning Prep') && blocksText.includes('Closing'));
@@ -409,7 +476,7 @@ check('the chosen weekdays are saved',
   JSON.stringify(addedItem?.weekdays) === '[1,3,5]', JSON.stringify(addedItem?.weekdays));
 
 await page.click('[data-tab="/blocks"]');
-await page.waitForSelector('text=New block', { timeout: 5000 });
+await page.waitForSelector('button:has-text("Add a task to")', { timeout: 8000 });
 await page.locator('button', { hasText: 'New block' }).first().click();
 await page.waitForSelector('#b-name', { timeout: 5000 });
 check('a new block only needs a name',
@@ -428,6 +495,13 @@ check('crew sees only three tabs (no manager tools)',
 check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test(await page.locator('.hero').innerText()));
 check('the crew just works the manager\'s list (no ad-hoc logging)',
   (await page.locator('.fab').count()) === 0);
+
+await page.locator('[data-teams]').click();
+await page.waitForSelector('text=Your locations', { timeout: 5000 });
+const crewSheet = await page.locator('.sheet-body').innerText();
+check('crew can join another team with a code', crewSheet.includes('Join a team with a code'));
+check('but crew cannot start a location', !crewSheet.includes('Add another location'));
+await page.click('.sheet-head [data-close]');
 const todayText = await page.locator('#view').innerText();
 check('the list is grouped under the named blocks', todayText.includes('Closing'));
 check('finished work drops off the crew list',

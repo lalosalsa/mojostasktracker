@@ -3,6 +3,7 @@
 import { el, esc, toast, busy, confirmSheet, sheet, initials } from '../ui.js';
 import * as data from '../data.js';
 import { state, isManager, setState } from '../store.js';
+import { openTeamSwitcher } from './teamSwitcher.js';
 import { sb } from '../supabase.js';
 import { clearSupabaseConfig, getSupabaseConfig, APP_NAME, BUILD_ID } from '../config.js';
 import { navigate } from '../router.js';
@@ -10,16 +11,17 @@ import { codeCard } from './team.js';
 
 export async function meView(container) {
   container.innerHTML = '';
-  const me = state.me;
+  const me = state.me || {};
+  const person = state.account || {};
   const admin = isManager();
 
   const card = el(`
     <div class="card">
       <div class="person">
-        <span class="avatar">${esc(initials(me.name || me.email))}</span>
+        <span class="avatar">${esc(initials(me.name || person.name || person.email))}</span>
         <span class="who">
           <span class="name" style="font-size:16px">${esc(me.name || 'Your name')}</span>
-          <span class="sub">${esc(me.email)}</span>
+          <span class="sub">${esc(person.email)}</span>
         </span>
         <span class="chip ${admin ? 'brand' : ''}">${admin ? 'Manager' : 'Crew'}</span>
       </div>
@@ -58,6 +60,21 @@ export async function meView(container) {
     }
   };
   container.appendChild(card);
+
+  /* ---- where they work ---- */
+  const teams = state.teams || [];
+  const locations = el(`
+    <div class="card mt">
+      <h2 style="font-size:15px">Where you work</h2>
+      <p class="small muted mt">${teams.length === 1
+        ? `You're on <strong>${esc(state.team?.name || '')}</strong>.`
+        : `You're on ${teams.length} teams. You're looking at <strong>${esc(state.team?.name || '')}</strong>.`}</p>
+      <button class="btn ghost block mt" data-switch>Switch or add a location</button>
+    </div>`);
+  locations.querySelector('[data-switch]').onclick = () => openTeamSwitcher({
+    onSwitched: () => meView(container),
+  });
+  container.appendChild(locations);
 
   /* ---- install to home screen ---- */
   const installed = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
@@ -101,7 +118,7 @@ export async function meView(container) {
   const account = el(`
     <div class="card mt">
       <h2 style="font-size:15px">Account</h2>
-      <p class="small muted mt">Signed in as ${esc(me.email)}${state.team ? ` on ${esc(state.team.name)}` : ''}.
+      <p class="small muted mt">Signed in as ${esc(person.email)}${state.team ? ` on ${esc(state.team.name)}` : ''}.
          This device stays signed in until you sign out.</p>
       <button class="btn ghost block mt" data-password>Change password</button>
       <button class="btn ghost block mt" data-signout>Sign out</button>

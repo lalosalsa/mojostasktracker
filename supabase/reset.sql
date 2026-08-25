@@ -21,6 +21,7 @@ drop table if exists public.task_windows    cascade;   -- from an interim versio
 drop table if exists public.shifts          cascade;   -- from an interim version
 drop table if exists public.member_devices  cascade;   -- from an interim version
 drop table if exists public.members         cascade;
+drop table if exists public.accounts        cascade;
 drop table if exists public.invites         cascade;   -- from the first version
 drop table if exists public.profiles        cascade;   -- from the first version
 drop table if exists public.teams           cascade;
@@ -30,6 +31,9 @@ drop table if exists public.login_codes     cascade;
 
 drop function if exists public.handle_new_user()                cascade;
 drop function if exists public.whoami()                         cascade;
+drop function if exists public.my_teams()                       cascade;
+drop function if exists public.my_membership()                  cascade;
+drop function if exists public.switch_team(uuid)                cascade;
 drop function if exists public.set_my_name(text)                cascade;
 drop function if exists public.create_team(text, text)          cascade;
 drop function if exists public.create_team(text, text, text)    cascade;

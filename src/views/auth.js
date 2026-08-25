@@ -221,9 +221,9 @@ export function signInView(root, { appName = APP_NAME } = {}) {
  * Shown once, right after sign-up, to anyone who isn't on a team yet.
  * onJoined(identity) hands the fresh { member, team } back to the app.
  */
-export function teamSetupView(root, member, onJoined) {
+export function teamSetupView(root, account, onJoined) {
   root.innerHTML = '';
-  const firstName = (member.name || '').split(' ')[0] || 'there';
+  const firstName = (account.name || '').split(' ')[0] || 'there';
 
   const wrap = el(`
     <div class="auth">
@@ -231,7 +231,7 @@ export function teamSetupView(root, member, onJoined) {
       <h1>Hi ${esc(firstName)}</h1>
       <p class="lede">Last step. Are you setting up a team, or joining one your manager already made?</p>
       <div data-step></div>
-      <p class="foot" data-foot>Signed in as ${esc(member.email)}</p>
+      <p class="foot" data-foot>Signed in as ${esc(account.email)}</p>
     </div>`);
   const step = wrap.querySelector('[data-step]');
 
@@ -248,7 +248,7 @@ export function teamSetupView(root, member, onJoined) {
   };
 
   const finish = async (identity, message) => {
-    setState({ me: identity.member, team: identity.team });
+    setState({ account: identity.account, me: identity.member, team: identity.team, teams: identity.teams || [] });
     toast(message, 'ok');
     onJoined(identity);
   };
@@ -282,7 +282,7 @@ export function teamSetupView(root, member, onJoined) {
       }
       busy(btn);
       try {
-        const identity = await data.joinTeam(code, member.name);
+        const identity = await data.joinTeam(code, account.name);
         await finish(identity, `You're on ${identity.team.name}`);
       } catch (err) {
         toast(friendlyError(err), 'error');
@@ -319,8 +319,8 @@ export function teamSetupView(root, member, onJoined) {
       }
       busy(btn);
       try {
-        const identity = await data.createTeam(teamName, member.name);
-        setState({ me: identity.member, team: identity.team });
+        const identity = await data.createTeam(teamName, account.name);
+        setState({ account: identity.account, me: identity.member, team: identity.team, teams: identity.teams || [] });
         codesStep(identity);
       } catch (err) {
         toast(friendlyError(err), 'error');
