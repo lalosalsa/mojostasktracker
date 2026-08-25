@@ -156,7 +156,7 @@ select title from public.tasks
 -- policy as well as the insert one
 set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
 select id as shared_task from public.tasks
- where title = 'Wipe tables between rushes' and assigned_to is null limit 1 \gset
+ where title = 'Stock the front cooler' and assigned_to is null limit 1 \gset
 insert into public.task_photos (task_id, member_id, storage_path)
 values (:shared_task, public.me(), public.me()::text || '/9/shared.jpg')
 returning id as photo_row_returned;

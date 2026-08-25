@@ -35,6 +35,26 @@ $RUN "PATH=$PGBIN:\$PATH initdb -D $PGDATA --auth=trust" >/dev/null
 $RUN "PATH=$PGBIN:\$PATH pg_ctl -D $PGDATA -o '-k $SOCK -p $PORT -c listen_addresses=' -l $PGDATA/log start" >/dev/null
 sleep 2
 
+# The suites raise errors on purpose — that is how "this must not be allowed" is
+# proved. So an unexpected error is easy to lose in the noise, and one already
+# was. Every suite therefore says how many errors it should raise, and a run
+# that raises a different number fails.
+FAILED=0
+suite() {
+  local name="$1" db="$2" file="$3" want="$4" out got
+  echo
+  echo "=== $name ==="
+  out=$(psql -h "$SOCK" -p "$PORT" -U postgres -d "$db" -f "$file" 2>&1)
+  echo "$out"
+  got=$(printf '%s\n' "$out" | grep -cE '^psql:.*[Ee][Rr][Rr][Oo][Rr]:' || true)
+  if [ "$got" != "$want" ]; then
+    echo "!! $name raised $got error(s); $want expected — read the output above"
+    FAILED=1
+  else
+    echo "-- $name: $got expected error(s), nothing unexpected"
+  fi
+}
+
 PSQL="psql -h $SOCK -p $PORT -U postgres -v ON_ERROR_STOP=1 -q"
 $PSQL -c "create database tracker;" >/dev/null
 $PSQL -d tracker -f "$HERE/local-stubs.sql" >/dev/null
@@ -42,38 +62,40 @@ $PSQL -d tracker -f "$HERE/../supabase/schema.sql" >/dev/null
 echo "schema applied cleanly"
 $PSQL -d tracker -f "$HERE/../supabase/schema.sql" >/dev/null
 echo "schema is re-runnable (idempotent)"
-psql -h "$SOCK" -p "$PORT" -U postgres -d tracker -f "$HERE/rls-test.sql"
+suite "identity and locations" tracker "$HERE/rls-test.sql" 5
 
-echo
-echo "=== blocks ==="
 $PSQL -c "drop database if exists blocks;" >/dev/null
 $PSQL -c "create database blocks;" >/dev/null
 $PSQL -d blocks -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d blocks -f "$HERE/../supabase/schema.sql" >/dev/null
-psql -h "$SOCK" -p "$PORT" -U postgres -d blocks -f "$HERE/blocks-test.sql"
+suite "blocks and the shared list" blocks "$HERE/blocks-test.sql" 3
 
-echo
-echo "=== write paths ==="
 $PSQL -c "drop database if exists writes;" >/dev/null
 $PSQL -c "create database writes;" >/dev/null
 $PSQL -d writes -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d writes -f "$HERE/../supabase/schema.sql" >/dev/null
-psql -h "$SOCK" -p "$PORT" -U postgres -d writes -f "$HERE/writes-test.sql"
+suite "write paths" writes "$HERE/writes-test.sql" 0
 
 echo
-echo "=== upgrade from the previous release ==="
 $PSQL -c "drop database if exists upgraded;" >/dev/null
 $PSQL -c "create database upgraded;" >/dev/null
 $PSQL -d upgraded -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d upgraded -f "$HERE/legacy-shape.sql" >/dev/null
 $PSQL -d upgraded -f "$HERE/../supabase/schema.sql" >/dev/null
 echo "old project upgraded in place"
-psql -h "$SOCK" -p "$PORT" -U postgres -d upgraded -f "$HERE/upgrade-test.sql"
+suite "upgrade from the previous release" upgraded "$HERE/upgrade-test.sql" 0
 
-echo
-echo "=== data preservation on upgrade ==="
 $PSQL -c "drop database if exists preserved;" >/dev/null
 $PSQL -c "create database preserved;" >/dev/null
 $PSQL -d preserved -f "$HERE/local-stubs.sql" >/dev/null
 $PSQL -d preserved -f "$HERE/legacy-shape.sql" >/dev/null
-(cd "$HERE/.." && psql -h "$SOCK" -p "$PORT" -U postgres -d preserved -f test/preserve-test.sql)
+cd "$HERE/.."   # this one reads a fixture by relative path
+suite "data preservation on upgrade" preserved test/preserve-test.sql 0
+
+echo
+if [ "$FAILED" = "0" ]; then
+  echo "All database suites passed"
+else
+  echo "Some database suites failed — see the !! lines above"
+  exit 1
+fi

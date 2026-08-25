@@ -136,8 +136,25 @@ export async function updateMyProfile(patch) {
 export const touchLastSeen = () => sb().rpc('touch_last_seen').then(() => {}, () => {});
 
 /* -------------------------------------------------------------------- tasks */
-export const ensureTodaysTasks = (date = todayStr()) =>
-  sb().rpc('ensure_todays_tasks', { p_date: date }).then(({ data }) => data || 0, () => 0);
+
+/* Filling in the day's tasks from the blocks that are scheduled for it.
+   Screens call this before they read, and with live sync a screen can redraw
+   many times a minute — so remember when a given day was last filled in and
+   don't ask again straight away. The call itself only ever inserts what is
+   missing, so skipping one is never wrong. Any change to the blocks clears this. */
+const filledIn = new Map();
+const FILL_GAP = 60_000;
+
+/** Called when someone else's change to the blocks reaches us. */
+export const forgetFilledDays = () => filledIn.clear();
+
+export function ensureTodaysTasks(date = todayStr()) {
+  const key = `${state.team?.id || '-'}|${date}`;
+  if (Date.now() - (filledIn.get(key) || 0) < FILL_GAP) return Promise.resolve(0);
+  filledIn.set(key, Date.now());
+  return sb().rpc('ensure_todays_tasks', { p_date: date })
+    .then(({ data }) => data || 0, () => { filledIn.delete(key); return 0; });
+}
 
 export async function listTasks({
   date, from, to, status, assignedTo, completedBy, search, unassigned, limit = 300,
@@ -385,9 +402,13 @@ export const listBlocks = async () =>
       .order('position')
   ) || [];
 
+/* Any change to the blocks changes what today should contain, so the next read
+   has to fill in again rather than trust what it worked out a moment ago. */
+const afterBlockChange = (p) => Promise.resolve(p).then((r) => { filledIn.clear(); return r; });
+
 export async function createBlock(fields, teamId) {
   const existing = await listBlocks();
-  return unwrap(await sb().from('blocks').insert({
+  const row = unwrap(await sb().from('blocks').insert({
     team_id: teamId,
     name: fields.name,
     starts_at: fields.startsAt || null,
@@ -395,12 +416,15 @@ export async function createBlock(fields, teamId) {
     position: existing.length,
     created_by: meId(),
   }).select().single());
+  filledIn.clear();
+  return row;
 }
 
 export const updateBlock = (id, patch) =>
-  sb().from('blocks').update(patch).eq('id', id).select().single().then(unwrap);
+  afterBlockChange(sb().from('blocks').update(patch).eq('id', id).select().single().then(unwrap));
 
-export const deleteBlock = (id) => sb().from('blocks').delete().eq('id', id).then(unwrap);
+export const deleteBlock = (id) =>
+  afterBlockChange(sb().from('blocks').delete().eq('id', id).then(unwrap));
 
 /** Moves a block earlier or later in the day. */
 export async function moveBlock(blocks, id, direction) {
@@ -418,7 +442,7 @@ export async function moveBlock(blocks, id, direction) {
 
 export async function addBlockItem(blockId, teamId, fields) {
   const siblings = unwrap(await sb().from('block_items').select('id').eq('block_id', blockId)) || [];
-  return unwrap(await sb().from('block_items').insert({
+  const row = unwrap(await sb().from('block_items').insert({
     block_id: blockId,
     team_id: teamId,
     title: fields.title,
@@ -431,12 +455,15 @@ export async function addBlockItem(blockId, teamId, fields) {
     position: siblings.length,
     created_by: meId(),
   }).select().single());
+  filledIn.clear();
+  return row;
 }
 
 export const updateBlockItem = (id, patch) =>
-  sb().from('block_items').update(patch).eq('id', id).select().single().then(unwrap);
+  afterBlockChange(sb().from('block_items').update(patch).eq('id', id).select().single().then(unwrap));
 
-export const deleteBlockItem = (id) => sb().from('block_items').delete().eq('id', id).then(unwrap);
+export const deleteBlockItem = (id) =>
+  afterBlockChange(sb().from('block_items').delete().eq('id', id).then(unwrap));
 
 /* ---------------------------------------------------------------- dashboard */
 export const employeeDayStats = async (date = todayStr()) =>

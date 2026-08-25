@@ -5,6 +5,7 @@
 
 import { sb } from './supabase.js';
 import { state, setState } from './store.js';
+import { forgetFilledDays } from './data.js';
 
 /** Tables where a change means what someone is looking at is now out of date. */
 const WATCHED = ['tasks', 'task_photos', 'blocks', 'block_items', 'members', 'activity'];
@@ -17,6 +18,9 @@ const pollMs = (fallback) => Number(window.__LIVE_POLL_MS__) || fallback;
 const POLL_WHEN_LIVE = 90_000;      // realtime is up: a slow safety net
 const POLL_WHEN_BLIND = 20_000;     // realtime is down: this is the only signal
 const SETTLE = 700;                 // let a burst of changes land as one refresh
+const MIN_GAP = 3000;               // hard floor between repaints, whatever fires
+
+let lastRefresh = 0;
 
 let channel = null;
 let refreshFn = null;
@@ -27,19 +31,51 @@ let attempts = 0;
 
 const isConnected = () => state.live?.status === 'connected';
 
-function scheduleRefresh(reason) {
+/**
+ * Presence noise, not content: "last seen" ticks over constantly and nobody is
+ * looking at a screen that redraws because someone opened the app.
+ */
+function isHeartbeatOnly(payload) {
+  if (payload.table !== 'members' || payload.eventType !== 'UPDATE') return false;
+  const before = payload.old || {};
+  const after = payload.new || {};
+  const changed = Object.keys(after).filter((k) => String(after[k]) !== String(before[k]));
+  return changed.length > 0 && changed.every((k) => k === 'last_seen_at');
+}
+
+function scheduleRefresh(payload) {
+  if (isHeartbeatOnly(payload)) return;
+
+  // Someone changed the day's plan on another phone: what today should contain
+  // has changed too, so the coming refresh must work it out again.
+  if (payload.table === 'blocks' || payload.table === 'block_items') forgetFilledDays();
+
   clearTimeout(debounce);
+  // A repaint can never come round faster than this, no matter what fires it.
+  // Without a floor, any write that feeds back into a subscription flickers the
+  // screen — which is exactly what "last seen" did once members was watched.
+  const wait = Math.max(SETTLE, MIN_GAP - (Date.now() - lastRefresh));
   debounce = setTimeout(() => {
     if (document.hidden || !navigator.onLine) return;   // catch up when they come back
-    setState({ live: { ...state.live, lastChange: Date.now(), reason } });
+    lastRefresh = Date.now();
+    setState({
+      live: { ...state.live, lastChange: lastRefresh, reason: `${payload.table}.${payload.eventType}` },
+    });
     refreshFn?.({ quiet: true });
-  }, SETTLE);
+  }, wait);
 }
+
+/* Realtime can't reach the test harness, so the suite feeds change events
+   through this instead. Harmless in production: it only runs what a real
+   websocket message would have run. */
+if (typeof window !== 'undefined') window.__LIVE_EMIT__ = (payload) => scheduleRefresh(payload);
 
 function startPolling() {
   clearInterval(poller);
   poller = setInterval(() => {
     if (document.hidden || !navigator.onLine) return;
+    if (Date.now() - lastRefresh < MIN_GAP) return;
+    lastRefresh = Date.now();
     refreshFn?.({ quiet: true });
   }, pollMs(isConnected() ? POLL_WHEN_LIVE : POLL_WHEN_BLIND));
 }
@@ -75,7 +111,7 @@ export function startLiveSync(onRefresh) {
           // task_photos has no team_id of its own; it is reached through its task
           ...(TEAM_SCOPED.includes(table) ? { filter: `team_id=eq.${teamId}` } : {}),
         },
-        (payload) => scheduleRefresh(`${payload.table}.${payload.eventType}`)
+        (payload) => scheduleRefresh(payload)
       );
     }
 
@@ -83,6 +119,7 @@ export function startLiveSync(onRefresh) {
       if (status === 'SUBSCRIBED') {
         attempts = 0;
         setStatus('connected');
+        lastRefresh = Date.now();
         refreshFn?.({ quiet: true });     // catch anything missed while away
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         setStatus('offline');
@@ -115,6 +152,9 @@ export function stopLiveSync({ keepPolling = false } = {}) {
 /** Called when the app comes back to the foreground or the network returns. */
 export function wakeLiveSync() {
   if (!state.team?.id) return;
-  refreshFn?.({ quiet: true });
+  if (Date.now() - lastRefresh >= MIN_GAP) {
+    lastRefresh = Date.now();
+    refreshFn?.({ quiet: true });
+  }
   if (!isConnected()) startLiveSync(refreshFn);
 }

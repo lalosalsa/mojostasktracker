@@ -15,7 +15,6 @@ export async function dashboardView(container, params = {}) {
 
   const date = params.date || data.todayStr();
   await data.ensureTodaysTasks(date);
-  data.touchLastSeen();
 
   // One fetch, one source of truth. The tiles used to come from a server-side
   // aggregate while the screen listed something else, so a count could claim

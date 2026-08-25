@@ -14,7 +14,6 @@ export async function todayView(container) {
 
   const today = data.todayStr();
   await data.ensureTodaysTasks(today);
-  data.touchLastSeen();
 
   let tasks;
   try {

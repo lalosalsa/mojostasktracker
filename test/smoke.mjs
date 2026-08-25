@@ -470,6 +470,50 @@ while (taskFetches < before + 2 && Date.now() < deadline) await page.waitForTime
 check('it keeps refetching when realtime is down', taskFetches >= before + 2,
   `only ${taskFetches - before} refetches before the deadline`);
 
+/* The screen used to flicker every fraction of a second: a render told the
+   server "still here", the server told every subscriber "a member changed",
+   and that brought the screen round again. Two things must hold now. */
+// Put the fallback poll out of the way first, so what follows measures only what
+// the change events themselves do. Coming back online is what re-reads the
+// interval, so nudge it through the same path the app really uses.
+await page.evaluate(() => {
+  window.__LIVE_POLL_MS__ = 120_000;
+  window.dispatchEvent(new Event('online'));
+});
+await page.waitForTimeout(2000);
+
+const quietStart = taskFetches;
+await page.evaluate(() => {
+  for (let i = 0; i < 12; i += 1) {
+    window.__LIVE_EMIT__({
+      table: 'members',
+      eventType: 'UPDATE',
+      old: { id: 'm1', name: 'Jose P', last_seen_at: '2026-08-25T10:00:00Z' },
+      new: { id: 'm1', name: 'Jose P', last_seen_at: `2026-08-25T10:0${i}:30Z` },
+    });
+  }
+});
+await page.waitForTimeout(2500);
+check('a teammate simply being online does not redraw the screen',
+  taskFetches === quietStart, `${taskFetches - quietStart} refetches from heartbeats alone`);
+
+// A busy crew ticking tasks off one after another must not turn into a repaint
+// per tick. These arrive a second apart, far enough not to be simply debounced,
+// so only the floor between repaints keeps the screen still.
+const burstStart = taskFetches;
+for (let i = 0; i < 6; i += 1) {
+  await page.evaluate((n) => {
+    window.__LIVE_EMIT__({
+      table: 'tasks', eventType: 'UPDATE', old: { id: n }, new: { id: n, status: 'submitted' },
+    });
+  }, i);
+  await page.waitForTimeout(1000);
+}
+await page.waitForTimeout(1500);
+const burst = taskFetches - burstStart;
+check('changes arriving one after another still settle into few repaints',
+  burst >= 1 && burst <= 3, `${burst} refetches from 6 changes over 6 seconds`);
+
 console.log('\nLocations');
 const switcher = page.locator('[data-teams]');
 check('the switcher sits in the top right, by the profile icon', await switcher.isVisible());
