@@ -248,7 +248,7 @@ what isn't:
 ```
  item                  | result                              | verdict
 -----------------------+-------------------------------------+---------
- schema version        | 2026.08.25-e                        | ok
+ schema version        | 2026.08.25-f                        | ok
  tables present        | 9 of 9                              | ok
  functions present     | 15 of 15                            | ok
  logins vs app records | 4 logins, 4 accounts, 4 memberships | ok
@@ -342,6 +342,16 @@ and falls back to polling every 20 seconds if that fails, so it should catch up
 either way. If it never goes live, check **Database → Replication** (or
 Publications) in Supabase includes the `supabase_realtime` publication — the
 schema adds the tables to it, and prints a notice if it wasn't allowed to.
+
+**The app keeps going in and out of live.** Fixed in `2026.08.25-f`. Closing a
+realtime channel reports that it closed — and that report arrives after the app
+has already moved on to its replacement. Read as "the connection dropped", it
+started a reconnect, which closed a channel, which reported that it closed: the
+dot cycling green → grey → green every couple of seconds, with a repaint each
+time. A channel that has been replaced is now ignored, and a connection has to
+hold for half a minute before it counts as a good one. Alongside it, two
+repaints in the air at once could leave the newer one stranded, so the screen
+sat on older data until something else came in. No database change needed.
 
 **The screen blinks every few seconds.** Fixed in `2026.08.25-e`. When the app
 brought itself up to date in the background it redrew the screen the same way it

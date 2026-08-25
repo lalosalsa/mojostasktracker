@@ -27,7 +27,16 @@ let refreshFn = null;
 let debounce = null;
 let poller = null;
 let retry = null;
+let steady = null;
 let attempts = 0;
+let missedWhileDown = false;
+
+/* Closing a channel tells us it closed — and that report arrives after we have
+   already moved on to its replacement. Taken at face value it reads as "the
+   connection dropped", which starts a reconnect, which closes a channel, which
+   reports that it closed. Every channel gets a number, and anything from a
+   number we have moved past is ignored. */
+let generation = 0;
 
 const isConnected = () => state.live?.status === 'connected';
 
@@ -65,10 +74,15 @@ function scheduleRefresh(payload) {
   }, wait);
 }
 
-/* Realtime can't reach the test harness, so the suite feeds change events
-   through this instead. Harmless in production: it only runs what a real
-   websocket message would have run. */
-if (typeof window !== 'undefined') window.__LIVE_EMIT__ = (payload) => scheduleRefresh(payload);
+/* No websocket reaches the test harness, so the suite stands in for one: it
+   feeds change events through the same function a real message would, and can
+   supply a channel whose connection it drives by hand. Both are inert in
+   production — nothing calls them unless a test does. */
+let openChannel = (name) => sb().channel(name);
+if (typeof window !== 'undefined') {
+  window.__LIVE_EMIT__ = (payload) => scheduleRefresh(payload);
+  window.__LIVE_CHANNEL__ = (factory) => { openChannel = factory || ((n) => sb().channel(n)); };
+}
 
 function startPolling() {
   clearInterval(poller);
@@ -91,15 +105,16 @@ function setStatus(status) {
  */
 export function startLiveSync(onRefresh) {
   refreshFn = onRefresh;
-  stopLiveSync({ keepPolling: true });
+  stopLiveSync({ keepPolling: true });     // moves the generation on
 
   const teamId = state.team?.id;
   if (!teamId) return;
 
+  const mine = generation;
   setStatus('connecting');
 
   try {
-    channel = sb().channel(`team-${teamId}`);
+    channel = openChannel(`team-${teamId}`);
 
     for (const table of WATCHED) {
       channel.on(
@@ -116,17 +131,29 @@ export function startLiveSync(onRefresh) {
     }
 
     channel.subscribe((status) => {
+      if (mine !== generation) return;    // a channel we have already replaced
       if (status === 'SUBSCRIBED') {
-        attempts = 0;
         setStatus('connected');
-        lastRefresh = Date.now();
-        refreshFn?.({ quiet: true });     // catch anything missed while away
+        /* Only a connection that holds counts as a good one. Clearing the
+           backoff the moment it says "subscribed" lets a link that keeps
+           dropping retry every couple of seconds, for ever. */
+        clearTimeout(steady);
+        steady = setTimeout(() => { if (mine === generation) attempts = 0; }, 30_000);
+
+        // Catch up on what happened while we were away — but only if we were.
+        if (missedWhileDown && Date.now() - lastRefresh >= MIN_GAP) {
+          lastRefresh = Date.now();
+          refreshFn?.({ quiet: true });
+        }
+        missedWhileDown = false;
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        missedWhileDown = true;
         setStatus('offline');
         scheduleReconnect();
       }
     });
   } catch {
+    missedWhileDown = true;
     setStatus('offline');                 // polling alone will keep it current
     scheduleReconnect();
   }
@@ -135,15 +162,18 @@ export function startLiveSync(onRefresh) {
 function scheduleReconnect() {
   clearTimeout(retry);
   attempts += 1;
-  const wait = Math.min(30_000, 1000 * 2 ** Math.min(attempts, 5));   // 2s → 30s
+  const wait = Number(window.__LIVE_RETRY_MS__)
+    || Math.min(30_000, 1000 * 2 ** Math.min(attempts, 5));           // 2s → 30s
   retry = setTimeout(() => {
     if (state.team?.id && !document.hidden) startLiveSync(refreshFn);
   }, wait);
 }
 
 export function stopLiveSync({ keepPolling = false } = {}) {
+  generation += 1;                        // whatever the old channel says now, it isn't news
   clearTimeout(debounce);
   clearTimeout(retry);
+  clearTimeout(steady);
   if (!keepPolling) clearInterval(poller);
   try { channel?.unsubscribe(); } catch { /* already gone */ }
   channel = null;

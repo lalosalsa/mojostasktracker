@@ -135,6 +135,12 @@ function paintChrome() {
 }
 
 /* ------------------------------------------------------------------ routes */
+
+/* Two repaints can be in the air at once — a slow one from a moment ago and a
+   fresh one — and the slow one must not land on top. Each takes a number and
+   only the newest is allowed to reach the screen. */
+let renderToken = 0;
+
 function guarded(view, { managersOnly = false } = {}) {
   return async (params) => {
     if (!state.me || !state.me.team_id) return;
@@ -148,6 +154,7 @@ function guarded(view, { managersOnly = false } = {}) {
        blink when the app is only keeping itself up to date in the background.
        So a background repaint is built off-screen and swapped in whole: one
        frame, no empty gap, and the page stays where you left it. */
+    const mine = ++renderToken;
     const quiet = state.quietRefresh;
     let container = live;
     if (quiet) {
@@ -165,8 +172,13 @@ function guarded(view, { managersOnly = false } = {}) {
       await view(container, params);
       if (parse().path !== startedAt) return resolve();   // repaint what's current
       if (quiet) {
+        if (mine !== renderToken) return;                 // a newer one is on its way
+        // Whatever is on screen now, not what was there when this started: an
+        // earlier repaint may already have swapped the node out from under us.
+        const onScreen = shell?.querySelector('#view');
+        if (!onScreen) return;
         const y = window.scrollY;
-        live.replaceWith(container);        // the finished screen, in one go
+        onScreen.replaceWith(container);    // the finished screen, in one go
         if (window.scrollY !== y) window.scrollTo({ top: y });   // stay where you were
       }
     } catch (err) {

@@ -135,9 +135,15 @@ const identityPayload = () => ({
       manager_code: identity === 'manager' ? TEAM2.manager_code : null, crew_count: 1 },
   ] : [],
 });
+let slowMs = 0;
+let stampVersion = false;
+let taskVersion = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 await context.route(`${SUPA}/**`, async (route) => {
   const url = route.request().url();
   const method = route.request().method();
+  if (slowMs && url.includes('/rest/v1/tasks') && method === 'GET') await sleep(slowMs);
   if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' } });
 
   if (url.includes('/auth/v1/signup')) {
@@ -228,6 +234,11 @@ await context.route(`${SUPA}/**`, async (route) => {
       return json(route, { ...tasks[0], ...patch });
     }
     if (url.includes('status=eq.submitted')) return json(route, tasks.filter((t) => t.status === 'submitted'));
+    if (stampVersion && method === 'GET') {
+      taskVersion += 1;
+      const v = taskVersion;
+      return json(route, tasks.map((t) => ({ ...t, title: `${t.title} (v${v})` })));
+    }
     return json(route, tasks);
   }
   if (url.includes('/rest/v1/activity')) {
@@ -540,6 +551,61 @@ check('nothing repaints while a task sheet is open',
 void beforeSheet;
 await page.click('.sheet-head [data-close]');
 await page.waitForTimeout(400);
+
+/* Losing the realtime connection must not turn into a loop. Closing a channel
+   reports that it closed, and if that reads as "the connection dropped" the app
+   reconnects, which closes a channel, which reports that it closed, for ever —
+   the app going in and out of live, repainting each time. No websocket reaches
+   this harness, so the test supplies the channel and works the connection. */
+const loop = await page.evaluate(async () => {
+  const opened = [];
+  window.__LIVE_RETRY_MS__ = 300;        // don't sit through the real backoff
+  window.__LIVE_CHANNEL__((name) => {
+    const ch = {
+      name,
+      on: () => ch,
+      subscribe(cb) { ch.cb = cb; opened.push(ch); setTimeout(() => cb('SUBSCRIBED'), 10); return ch; },
+      // this is the part that bites: closing a channel reports that it closed
+      unsubscribe() { ch.cb?.('CLOSED'); },
+    };
+    return ch;
+  });
+
+  window.dispatchEvent(new Event('online'));          // connect, using our channel
+  await new Promise((r) => setTimeout(r, 400));
+  opened[opened.length - 1]?.cb?.('CHANNEL_ERROR');   // one real drop
+  await new Promise((r) => setTimeout(r, 4000));      // 300ms retries: room to spiral
+  return { channels: opened.length, status: document.querySelector('[data-live]')?.className };
+});
+check('one dropped connection means one reconnect, not a spiral',
+  loop.channels <= 3, `opened ${loop.channels} channels in 4s`);
+check('and it settles back to live', /connected/.test(loop.status || ''), loop.status);
+await page.evaluate(() => {
+  window.__LIVE_CHANNEL__(null);
+  window.__LIVE_RETRY_MS__ = 0;
+});
+
+/* Two repaints in the air at once on a slow connection. The one that started
+   later holds the newer data, so it is the one that must end up on screen —
+   whichever order they happen to come back in. */
+stampVersion = true;
+slowMs = 5000;
+await page.evaluate(() => {
+  window.__LIVE_EMIT__({ table: 'tasks', eventType: 'UPDATE', old: { id: 4 }, new: { id: 4, status: 'open' } });
+});
+await page.waitForTimeout(3500);
+await page.evaluate(() => {
+  window.__LIVE_EMIT__({ table: 'tasks', eventType: 'UPDATE', old: { id: 5 }, new: { id: 5, status: 'open' } });
+});
+await page.waitForTimeout(9000);
+slowMs = 0;
+const shown = await page.locator('#view').innerText();
+const versions = [...shown.matchAll(/\(v(\d+)\)/g)].map((m) => Number(m[1]));
+check('the screen ends up showing the newest data, not the slowest request',
+  versions.length > 0 && Math.max(...versions) === taskVersion,
+  `screen shows v${versions.join('/')}, newest fetched was v${taskVersion}`);
+check('and exactly one screen is mounted', (await page.locator('#view').count()) === 1);
+stampVersion = false;
 
 // A busy crew ticking tasks off one after another must not turn into a repaint
 // per tick. These arrive a second apart, far enough not to be simply debounced,

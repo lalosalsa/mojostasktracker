@@ -1300,7 +1300,7 @@ end
 $realtime$;
 
 insert into public.schema_meta (id, version, applied_at)
-values (1, '2026.08.25-e', now())
+values (1, '2026.08.25-f', now())
 on conflict (id) do update set version = excluded.version, applied_at = now();
 
 grant select on public.schema_meta to authenticated;
