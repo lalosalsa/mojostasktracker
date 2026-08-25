@@ -610,21 +610,31 @@ create policy tasks_delete on public.tasks for delete to authenticated
          and (public.is_manager() or (created_by = public.me() and status <> 'verified')));
 
 -- photos
+-- Must stay at least as wide as photos_insert below: the app inserts a photo
+-- and asks for the row back, and that RETURNING is checked against this policy.
+-- A shared task is unassigned, so leaving that case out here made every crew
+-- upload fail with "violates row-level security".
 drop policy if exists photos_select on public.task_photos;
 create policy photos_select on public.task_photos for select to authenticated
-  using (exists (
-    select 1 from public.tasks t
-     where t.id = task_id and t.team_id = public.my_team()
-       and (public.is_manager() or t.assigned_to = public.me() or t.created_by = public.me())
-  ));
+  using (
+    task_photos.member_id = public.me()
+    or exists (
+      select 1 from public.tasks t
+       where t.id = task_photos.task_id and t.team_id = public.my_team()
+         and (public.is_manager()
+              or t.assigned_to = public.me()
+              or t.assigned_to is null
+              or t.created_by = public.me())
+    )
+  );
 
 drop policy if exists photos_insert on public.task_photos;
 create policy photos_insert on public.task_photos for insert to authenticated
   with check (
-    member_id = public.me()
+    task_photos.member_id = public.me()
     and exists (
       select 1 from public.tasks t
-       where t.id = task_id and t.team_id = public.my_team()
+       where t.id = task_photos.task_id and t.team_id = public.my_team()
          and t.status <> 'verified'
          and (public.is_manager() or t.assigned_to = public.me() or t.assigned_to is null)
     )
@@ -632,16 +642,18 @@ create policy photos_insert on public.task_photos for insert to authenticated
 
 drop policy if exists photos_update on public.task_photos;
 create policy photos_update on public.task_photos for update to authenticated
-  using (member_id = public.me() or public.is_manager())
-  with check (member_id = public.me() or public.is_manager());
+  using (task_photos.member_id = public.me() or public.is_manager())
+  with check (task_photos.member_id = public.me() or public.is_manager());
 
 drop policy if exists photos_delete on public.task_photos;
 create policy photos_delete on public.task_photos for delete to authenticated
   using (
-    exists (select 1 from public.tasks t where t.id = task_id and t.team_id = public.my_team())
+    exists (select 1 from public.tasks t
+             where t.id = task_photos.task_id and t.team_id = public.my_team())
     and (public.is_manager()
-         or (member_id = public.me()
-             and exists (select 1 from public.tasks t where t.id = task_id and t.status <> 'verified')))
+         or (task_photos.member_id = public.me()
+             and exists (select 1 from public.tasks t
+                          where t.id = task_photos.task_id and t.status <> 'verified')))
   );
 
 -- blocks and their standing items: everyone reads the day's plan, managers edit

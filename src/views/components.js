@@ -136,6 +136,32 @@ export function trendBars(rows) {
   return el(`<div><div class="bars">${bars}</div><div class="bars-x">${labels}</div></div>`);
 }
 
+/**
+ * The last seven days as tappable chips, each showing how much of that day got
+ * finished. This is how a manager checks back that yesterday actually got done.
+ */
+export function weekStrip(days, selected, onPick) {
+  const wrap = el('<div class="weekstrip"></div>');
+  for (const day of days) {
+    const total = Number(day.total) || 0;
+    const done = Number(day.completed) || 0;
+    const complete = total > 0 && done === total;
+    const [y, m, d] = day.day.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+
+    const chip = el(`
+      <button class="wday ${day.day === selected ? 'on' : ''} ${complete ? 'complete' : ''}"
+              aria-pressed="${day.day === selected}">
+        <span class="dow">${date.toLocaleDateString(undefined, { weekday: 'narrow' })}</span>
+        <span class="num">${date.getDate()}</span>
+        <span class="tally">${total ? `${done}/${total}` : '–'}</span>
+      </button>`);
+    chip.onclick = () => onPick(day.day);
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
 export function activityLine(row) {
   const verbs = {
     'task.created': 'added',

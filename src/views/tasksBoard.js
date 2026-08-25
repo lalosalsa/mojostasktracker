@@ -3,7 +3,7 @@
 import { el, esc, toast, busy, sheet, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { navigate } from '../router.js';
-import { taskCard, emptyState, skeletonList, sectionHead, statTile, blockHeading } from './components.js';
+import { taskCard, emptyState, skeletonList, sectionHead, statTile, blockHeading, weekStrip } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 
 export async function taskBoardView(container, params = {}) {
@@ -20,8 +20,9 @@ export async function taskBoardView(container, params = {}) {
   fab.onclick = () => openTaskEditor(null, () => taskBoardView(container, params));
   container.appendChild(fab);
 
-  await data.ensureTodaysTasks(date);
-  const [employees, tasks] = await Promise.all([
+  const today = data.todayStr();
+  if (date === today) await data.ensureTodaysTasks(date);
+  const [employees, tasks, week] = await Promise.all([
     data.listActiveEmployees(),
     data.listTasks({
       date: params.all ? undefined : date,
@@ -29,6 +30,7 @@ export async function taskBoardView(container, params = {}) {
       status,
       limit: 300,
     }),
+    data.dailyTrend(data.shiftDate(today, -6), today).catch(() => []),
   ]);
 
   const refresh = () => taskBoardView(container, params);
@@ -42,11 +44,22 @@ export async function taskBoardView(container, params = {}) {
 
   shell.innerHTML = '';
 
-  const filters = el(`
+  const strip = el(`
     <div class="card card-tight">
+      <div class="section-head" style="margin-bottom:8px">
+        <h2>${esc(date === today ? 'Today' : fmtDate(date))}</h2>
+        <span class="spacer"></span>
+        <span class="small muted">last 7 days</span>
+      </div>
+    </div>`);
+  strip.appendChild(weekStrip(week, date, (day) => setParam({ date: day })));
+  shell.appendChild(strip);
+
+  const filters = el(`
+    <div class="card card-tight mt">
       <div class="row">
         <div class="field" style="margin-bottom:0">
-          <label for="f-date">Day</label>
+          <label for="f-date">Any other day</label>
           <input class="input" id="f-date" type="date" value="${esc(date)}">
         </div>
         <div class="field" style="margin-bottom:0">
@@ -75,16 +88,20 @@ export async function taskBoardView(container, params = {}) {
 
   const done = tasks.filter((t) => t.isDone).length;
   const needsReview = tasks.filter((t) => t.status === 'submitted').length;
+  const photos = tasks.reduce((n, t) => n + (t.photos?.length || 0), 0);
   shell.appendChild(el(`
     <div class="stats mt">
       ${statTile(tasks.length, 'Tasks')}
-      ${statTile(done, 'Done', 'ok')}
+      ${statTile(done, 'Done', done ? 'ok' : '')}
       ${statTile(needsReview, 'To review', needsReview ? 'warn' : '')}
-      ${statTile(tasks.filter((t) => !t.assigned_to).length, 'Unassigned')}
+      ${statTile(photos, 'Photos')}
     </div>`));
 
   if (!tasks.length) {
-    shell.appendChild(emptyState('📋', 'No tasks for this filter', `Nothing on ${fmtDate(date)}. Use the button below to add one.`));
+    shell.appendChild(emptyState('📋', 'Nothing on this day',
+      date === today
+        ? 'Set up the blocks of your day and the list builds itself each morning.'
+        : `No tasks were logged on ${fmtDate(date)}.`));
     return;
   }
 

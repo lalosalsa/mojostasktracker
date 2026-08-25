@@ -117,7 +117,7 @@ export const ensureTodaysTasks = (date = todayStr()) =>
   sb().rpc('ensure_todays_tasks', { p_date: date }).then(({ data }) => data || 0, () => 0);
 
 export async function listTasks({
-  date, from, to, status, assignedTo, search, unassigned, limit = 300,
+  date, from, to, status, assignedTo, completedBy, search, unassigned, limit = 300,
 } = {}) {
   let q = sb().from('tasks').select(TASK_FIELDS);
 
@@ -128,6 +128,7 @@ export async function listTasks({
   else if (status === 'done') q = q.in('status', ['submitted', 'verified']);
   else if (status && status !== 'all') q = q.eq('status', status);
   if (assignedTo) q = q.eq('assigned_to', assignedTo);
+  if (completedBy) q = q.eq('completed_by', completedBy);
   if (unassigned) q = q.is('assigned_to', null);
   if (search) q = q.or(`title.ilike.%${search}%,description.ilike.%${search}%,location.ilike.%${search}%`);
 

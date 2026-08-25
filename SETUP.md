@@ -184,9 +184,12 @@ git push -u origin main
 ## Day-to-day
 
 - **Crew:** open the app → the day's list is there, grouped by block → do a job,
-  photo it, mark it done. Their name goes on it automatically.
-- **You:** Overview for the pulse of the day, Review to check the photos and sign
-  off, Reports → **Download CSV** for records.
+  photo it, mark it done. Their name goes on it automatically and it drops off
+  the list, so nobody doubles up.
+- **You:** Overview shows **Finished today** — each completed job with its photo
+  and who did it. Review is where you sign off. The Tasks tab opens on the last
+  seven days, so you can tap back through the week and confirm previous days
+  were finished. Reports → **Download CSV** for records.
 
 ## Costs
 

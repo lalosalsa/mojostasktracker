@@ -16,7 +16,7 @@ export async function historyView(container, params = {}) {
   const from = params.from || data.shiftDate(to, -13);
 
   const [tasks, stats] = await Promise.all([
-    data.listTasks({ from, to, assignedTo: state.me.id }),
+    data.listTasks({ from, to, completedBy: state.me.id }),
     data.rangeStats(from, to, state.me.id),
   ]);
 
@@ -24,7 +24,7 @@ export async function historyView(container, params = {}) {
   shell.appendChild(el(`
     <div class="card">
       <div class="section-head" style="margin-bottom:10px">
-        <h2>Last 14 days</h2><span class="spacer"></span>
+        <h2>What you've finished</h2><span class="spacer"></span>
         <span class="small muted">${esc(fmtDate(from, { weekday: false }))} – ${esc(fmtDate(to, { weekday: false }))}</span>
       </div>
       <div class="stats">
@@ -36,7 +36,8 @@ export async function historyView(container, params = {}) {
     </div>`));
 
   if (!tasks.length) {
-    shell.appendChild(emptyState('🗓', 'Nothing logged yet', 'Tasks you finish will build up here so you have a record of your work.'));
+    shell.appendChild(emptyState('🗓', 'Nothing finished yet',
+      'Tasks you complete build up here, so you have a record of your own work.'));
     return;
   }
 
@@ -47,9 +48,8 @@ export async function historyView(container, params = {}) {
   }
 
   for (const [day, list] of byDay) {
-    const done = list.filter((t) => t.isDone).length;
     const sec = el(`<div class="section">${sectionHead(fmtDate(day), null,
-      `<span class="chip ${done === list.length ? 'ok' : ''}">${done}/${list.length} done</span>`)}</div>`);
+      `<span class="chip ok">${list.length} done</span>`)}</div>`);
     for (const task of data.sortTasks(list)) {
       sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: () => historyView(container, params) })));
     }

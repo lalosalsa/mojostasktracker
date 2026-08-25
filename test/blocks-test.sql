@@ -131,6 +131,18 @@ select public.ensure_todays_tasks(date '2026-08-29') as saturday_built;
 select title from public.tasks
  where work_date = date '2026-08-29' and title like 'Weekend%';
 
+\echo '--- 13b. a crew member can attach a photo to a SHARED (unassigned) task'
+-- the app inserts and asks for the row back, so this exercises the select
+-- policy as well as the insert one
+set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
+select id as shared_task from public.tasks
+ where title = 'Wipe tables between rushes' and assigned_to is null limit 1 \gset
+insert into public.task_photos (task_id, member_id, storage_path)
+values (:shared_task, public.me(), public.me()::text || '/9/shared.jpg')
+returning id as photo_row_returned;
+select count(*) as mia_can_see_her_photo from public.task_photos
+ where member_id = '33333333-3333-3333-3333-333333333333';
+
 \echo '--- 14. photo files: crew upload to their own folder, manager can see them'
 reset role;
 grant insert, select, update, delete on storage.objects to authenticated;

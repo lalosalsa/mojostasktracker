@@ -27,6 +27,8 @@ export async function todayView(container) {
 
   const refresh = () => todayView(container);
   const doneCount = tasks.filter((t) => t.isDone).length;
+  // Finished work drops off the crew's list — a shared list only shows what is
+  // still outstanding, so nobody redoes a job someone else already did.
   const todo = tasks.filter((t) => ['open', 'in_progress', 'rejected'].includes(t.status));
   const mineDone = tasks.filter((t) => t.completed_by === state.me.id);
   const photos = tasks.reduce((n, t) => n + (t.photos?.length || 0), 0);
@@ -55,17 +57,17 @@ export async function todayView(container) {
       ${statTile(photos, 'Photos')}
     </div>`));
 
-  const rejected = todo.filter((t) => t.status === 'rejected');
-  if (rejected.length) {
+  const sentBack = todo.filter((t) => t.status === 'rejected');
+  if (sentBack.length) {
     shell.appendChild(el(`
       <div class="banner danger mt">
         <span class="ic">↩︎</span>
-        <div><strong>${rejected.length} task${rejected.length === 1 ? '' : 's'} sent back</strong><br>
-        Your manager asked for a redo — open ${rejected.length === 1 ? 'it' : 'them'} below for details.</div>
+        <div><strong>${sentBack.length} task${sentBack.length === 1 ? '' : 's'} sent back</strong><br>
+        A manager asked for these to be redone — they're back on the list below.</div>
       </div>`));
   }
 
-  for (const group of data.groupByBlock(tasks)) {
+  for (const group of data.groupByBlock(todo)) {
     const sec = el(`<div class="section">${blockHeading(group)}</div>`);
     for (const task of group.tasks) {
       sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: refresh }), { showAssignee: true }));
@@ -75,8 +77,13 @@ export async function todayView(container) {
 
   if (!tasks.length) {
     shell.appendChild(
-      emptyState('🎉', 'Nothing on the list yet',
+      emptyState('📋', 'Nothing on the list yet',
         "When your manager sets up the day's blocks, the list shows up here.")
+    );
+  } else if (!todo.length) {
+    shell.appendChild(
+      emptyState('🎉', "That's the whole list done",
+        `All ${doneCount} task${doneCount === 1 ? '' : 's'} are finished and with your manager. Nice work.`)
     );
   }
 }

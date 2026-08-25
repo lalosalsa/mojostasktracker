@@ -37,6 +37,9 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
   many are done in each.
 - Nothing is pre-assigned: pick up whatever needs doing. Finishing a task puts
   your name on it, so the manager can see who did what.
+- A finished task drops off everyone's list straight away, so nobody redoes a job
+  someone else already did. A task sent back for a redo reappears.
+- History keeps a record of everything you personally finished.
 - The crew's screen is only the manager's list — there's nothing else to learn.
 - Open a task → take photos → add notes → mark it done.
 - A task that requires a photo *cannot* be marked done without one. That rule is
@@ -45,8 +48,12 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 
 **For the manager**
 
-- Overview: how much of today's work is done, per-person scoreboard, live
-  activity feed, 14-day trend.
+- Overview: how much of today's work is done, a per-person scoreboard, and a
+  **Finished today** feed — every completed job with the photo proof and the name
+  of whoever did it, newest first.
+- Look back a full week: the task board opens on a strip of the last seven days
+  showing how much of each got finished, so you can check Tuesday actually got
+  done. Any older date works too.
 - Review queue: photo proof for every finished task — verify it, or send it back
   with a note telling the crew what to fix.
 - Blocks: name the parts of the day, reorder them, and fill each with its

@@ -18,7 +18,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const failures = [];
 const check = (name, ok, extra = '') => {
-  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${extra ? ` — ${extra}` : ''}`);
+  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${!ok && extra ? ` — ${extra}` : ''}`);
   if (!ok) failures.push(name);
 };
 
@@ -157,7 +157,15 @@ await context.route(`${SUPA}/**`, async (route) => {
       photos: 4, last_completed_at: `${today}T16:00:00Z` }]);
   }
   if (url.includes('/rest/v1/rpc/daily_trend')) {
-    return json(route, Array.from({ length: 14 }, (_, i) => ({ day: today, total: 5 + i % 3, completed: 3 + i % 2 })));
+    const body = JSON.parse(route.request().postData() || '{}');
+    const days = [];
+    const start = new Date(`${body.p_from || today}T00:00:00`);
+    const end = new Date(`${body.p_to || today}T00:00:00`);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      days.push({ day: iso, total: 4, completed: iso === today ? 1 : 4 });
+    }
+    return json(route, days);
   }
   if (url.includes('/rest/v1/rpc/range_stats')) {
     return json(route, [{ total: 8, open: 2, submitted: 1, verified: 5, rejected: 0, completed: 6, photos: 12 }]);
@@ -295,6 +303,21 @@ await page.waitForSelector('.tabbar', { timeout: 8000 });
 check('manager lands on the overview', await page.locator('text=Overview').first().isVisible());
 check('shows the crew scoreboard', await page.locator('text=Jose P').first().isVisible());
 check('flags work waiting on review', await page.locator('text=waiting on you').isVisible());
+
+const feed = await page.locator('#view').innerText();
+check('completed work forms a feed on the overview', feed.includes('Finished today'));
+check('the feed names who completed each task', feed.includes('✓ Jose P'));
+check('and the photo proof is right there in the feed',
+  (await page.locator('#view img[data-path]').count()) > 0);
+await page.waitForFunction(() => {
+  const img = document.querySelector('#view img[data-path]');
+  return img && img.complete && img.naturalWidth > 0;
+}, null, { timeout: 5000 }).catch(() => {});
+check('the feed photos actually load',
+  await page.evaluate(() => {
+    const img = document.querySelector('#view img[data-path]');
+    return Boolean(img && img.naturalWidth > 0);
+  }));
 await page.screenshot({ path: 'test/shots/05-dashboard.png', fullPage: true });
 
 await page.click('[data-tab="/review"]');
@@ -314,6 +337,21 @@ await page.screenshot({ path: 'test/shots/06-review.png', fullPage: true });
 await page.evaluate(() => { location.hash = '#/tasks'; });
 await page.waitForSelector('.task', { timeout: 5000 });
 check('task board renders task cards', (await page.locator('.task').count()) >= 2);
+check('the manager gets a full week to look back over',
+  (await page.locator('.weekstrip .wday').count()) === 7);
+check('each day shows how much of it got finished',
+  /\d+\/\d+/.test(await page.locator('.weekstrip').innerText()));
+check('the manager still sees finished work, with its photo',
+  (await page.locator('#view').innerText()).includes('Sweep the shop floor')
+  && (await page.locator('.task .thumbs img').count()) > 0);
+await page.screenshot({ path: 'test/shots/16-week.png', fullPage: true });
+
+const otherDay = page.locator('.weekstrip .wday').nth(2);
+await otherDay.click();
+await page.waitForTimeout(900);
+check('tapping a past day loads that day', (await page.locator('.weekstrip .wday.on').count()) === 1);
+await page.evaluate(() => { location.hash = '#/tasks'; });
+await page.waitForSelector('.task', { timeout: 5000 });
 await page.locator('.task').first().click();
 await page.waitForSelector('.sheet', { timeout: 5000 });
 check('task detail sheet opens', await page.locator('.sheet-head h2').isVisible());
@@ -391,10 +429,11 @@ check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test
 check('the crew just works the manager\'s list (no ad-hoc logging)',
   (await page.locator('.fab').count()) === 0);
 const todayText = await page.locator('#view').innerText();
-check('the list is grouped under the named blocks',
-  todayText.includes('Morning Prep') && todayText.includes('Closing'));
-check('a block heading carries its time range', todayText.includes('7am – 11am'));
-check('finished work shows who did it', todayText.includes('✓ Jose P'));
+check('the list is grouped under the named blocks', todayText.includes('Closing'));
+check('finished work drops off the crew list',
+  !todayText.includes('Sweep the shop floor'), 'the done task is still showing');
+check('the outstanding task is still there', todayText.includes('Restock the van'));
+check('the day\'s progress still counts what was done', todayText.includes('1 of 2 done today'));
 await page.screenshot({ path: 'test/shots/10-today.png', fullPage: true });
 
 console.log('\nPhoto upload');
@@ -411,6 +450,7 @@ await page.waitForFunction(() => document.querySelector('.gallery .shot img'), n
   .catch(() => {});
 check('photo uploaded to storage under the user folder',
   uploadedPath.startsWith(`${USER_ID}/2/`), uploadedPath);
+console.log(`      (${uploadedBytes} bytes after shrinking)`);
 check('photo was compressed to JPEG before upload',
   uploadedPath.endsWith('.jpg') && uploadedBytes > 0 && uploadedBytes < 300_000, `${uploadedBytes} bytes`);
 check('photo row written to the database', uploadedRows >= 1);
@@ -419,8 +459,8 @@ await page.screenshot({ path: 'test/shots/11-photo.png' });
 await page.click('.sheet-head [data-close]');
 
 await page.click('[data-tab="/history"]');
-await page.waitForSelector('text=Last 14 days', { timeout: 5000 });
-check('history view renders', true);
+await page.waitForSelector("text=What you've finished", { timeout: 5000 });
+check('history shows what this person finished', true);
 
 console.log('\nPWA plumbing');
 const manifest = JSON.parse(fs.readFileSync(path.join(PUBLIC, 'manifest.webmanifest'), 'utf8'));
@@ -435,7 +475,7 @@ const cached = await page.evaluate(async () => {
   const cache = await caches.open(keys.find((k) => k.startsWith('shell-')));
   return (await cache.keys()).length;
 });
-check('app shell is precached for offline launch', cached >= 4, `${cached} files`);
+check('app shell is precached for offline launch', cached >= 4, `only ${cached} files`);
 
 console.log('\nDark mode');
 const dark = await context.newPage();

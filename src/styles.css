@@ -284,6 +284,24 @@ a { color: var(--brand); }
   padding: 14px; font-variant-numeric: tabular-nums;
 }
 
+/* the manager's last-seven-days strip */
+.weekstrip { display: flex; gap: 6px; }
+.weekstrip .wday {
+  flex: 1; min-width: 0; padding: 8px 2px 7px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.weekstrip .wday .dow { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.weekstrip .wday .num { font-size: 15px; font-weight: 700; line-height: 1.1; }
+.weekstrip .wday .tally { font-size: 10px; font-weight: 650; color: var(--muted); font-variant-numeric: tabular-nums; }
+.weekstrip .wday.complete { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.weekstrip .wday.complete .tally { color: var(--ok); }
+.weekstrip .wday.on {
+  background: var(--brand); border-color: var(--brand); color: #fff;
+}
+.weekstrip .wday.on .dow, .weekstrip .wday.on .tally { color: rgba(255, 255, 255, .85); }
+.weekstrip .wday:active { transform: scale(.96); }
+
 /* the S M T W T F S day picker */
 .daypick { display: flex; gap: 6px; }
 .daypick .day {

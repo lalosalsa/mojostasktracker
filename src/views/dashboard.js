@@ -1,9 +1,11 @@
 /* Manager home: who is working, what's done, what needs a look. */
 
-import { el, esc, fmtDate, timeAgo, initials } from '../ui.js';
+import { el, esc, fmtDate, fmtTime, timeAgo, initials } from '../ui.js';
 import * as data from '../data.js';
 import { navigate } from '../router.js';
 import { statTile, emptyState, skeletonList, sectionHead, trendBars, activityLine, progressRing } from './components.js';
+import { hydrateThumbs, openLightbox } from '../photos.js';
+import { openTaskSheet } from './taskSheet.js';
 
 export async function dashboardView(container, params = {}) {
   container.innerHTML = '';
@@ -15,11 +17,12 @@ export async function dashboardView(container, params = {}) {
   await data.ensureTodaysTasks(date);
   data.touchLastSeen();
 
-  const [stats, people, trend, activity] = await Promise.all([
+  const [stats, people, trend, activity, finished] = await Promise.all([
     data.rangeStats(date, date),
     data.employeeDayStats(date),
     data.dailyTrend(data.shiftDate(date, -13), date),
     data.listActivity(25),
+    data.listTasks({ date, status: 'done', limit: 100 }),
   ]);
 
   shell.innerHTML = '';
@@ -81,6 +84,50 @@ export async function dashboardView(container, params = {}) {
   }
   shell.appendChild(crew);
 
+  /* ---- what got finished, with the proof ---- */
+  const feed = el(`<div class="section">${sectionHead('Finished today', finished.length)}</div>`);
+  if (!finished.length) {
+    feed.appendChild(emptyState('📷', 'Nothing finished yet',
+      'As the crew mark jobs done, the photo proof lands here.'));
+  }
+
+  const byNewest = [...finished].sort(
+    (a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || ''))
+  );
+  for (const task of byNewest) {
+    const shots = (task.photos || []).slice(0, 4).map((p) =>
+      `<img data-path="${esc(p.thumb_path || p.storage_path)}" alt="" loading="lazy"
+            style="width:64px;height:64px;border-radius:10px;object-fit:cover;
+                   border:1px solid var(--line);cursor:zoom-in;flex:none">`).join('');
+
+    const card = el(`
+      <div class="card card-tight" style="cursor:pointer">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:650;font-size:14.5px">${esc(task.title)}</div>
+            <div class="small" style="margin-top:4px">
+              <strong style="color:var(--ok)">✓ ${esc(task.finisher?.name || task.assignee?.name || 'Someone')}</strong>
+              <span class="muted"> · ${esc(fmtTime(task.completed_at))}${task.block ? ` · ${esc(task.block.name)}` : ''}</span>
+            </div>
+          </div>
+          <span class="chip ${task.status === 'verified' ? 'ok' : 'warn'}">
+            ${task.status === 'verified' ? '✓ verified' : 'to review'}</span>
+        </div>
+        ${task.photos?.length
+          ? `<div style="display:flex;gap:6px;margin-top:9px;overflow-x:auto">${shots}
+             ${task.photos.length > 4 ? `<span class="chip" style="align-self:center">+${task.photos.length - 4}</span>` : ''}</div>`
+          : '<p class="small mt" style="color:var(--danger)">No photo attached</p>'}
+      </div>`);
+
+    card.querySelectorAll('img[data-path]').forEach((img, i) => {
+      img.onclick = (e) => { e.stopPropagation(); openLightbox(task.photos, i); };
+    });
+    card.onclick = () => openTaskSheet(task, { onChange: () => dashboardView(container, params) });
+    hydrateThumbs(card);
+    feed.appendChild(card);
+  }
+  shell.appendChild(feed);
+
   /* ---- trend ---- */
   if (trend.length) {
     const card = el(`<div class="card mt-lg"><h2 style="font-size:15px">Last 14 days</h2></div>`);
@@ -90,12 +137,12 @@ export async function dashboardView(container, params = {}) {
   }
 
   /* ---- activity ---- */
-  const feed = el(`<div class="section">${sectionHead('Live activity')}<div class="card"></div></div>`);
-  const list = feed.querySelector('.card');
+  const log = el(`<div class="section">${sectionHead('Everything that happened')}<div class="card"></div></div>`);
+  const list = log.querySelector('.card');
   if (!activity.length) {
     list.appendChild(el('<p class="small muted">Nothing has happened yet today.</p>'));
   } else {
     list.appendChild(el(`<ul class="timeline">${activity.map(activityLine).join('')}</ul>`));
   }
-  shell.appendChild(feed);
+  shell.appendChild(log);
 }
