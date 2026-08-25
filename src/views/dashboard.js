@@ -3,7 +3,7 @@
 import { el, esc, fmtDate, fmtTime, timeAgo, initials } from '../ui.js';
 import * as data from '../data.js';
 import { navigate } from '../router.js';
-import { statTile, emptyState, skeletonList, sectionHead, trendBars, activityLine, progressRing } from './components.js';
+import { statTile, emptyState, skeletonList, sectionHead, trendBars, activityLine, progressRing, taskCard } from './components.js';
 import { hydrateThumbs, openLightbox } from '../photos.js';
 import { openTaskSheet } from './taskSheet.js';
 
@@ -17,13 +17,26 @@ export async function dashboardView(container, params = {}) {
   await data.ensureTodaysTasks(date);
   data.touchLastSeen();
 
-  const [stats, people, trend, activity, finished] = await Promise.all([
-    data.rangeStats(date, date),
+  // One fetch, one source of truth. The tiles used to come from a server-side
+  // aggregate while the screen listed something else, so a count could claim
+  // work that nothing on the page could show you.
+  const [dayTasks, people, trend, activity] = await Promise.all([
+    data.listTasks({ date, limit: 300 }),
     data.employeeDayStats(date),
     data.dailyTrend(data.shiftDate(date, -13), date),
     data.listActivity(25),
-    data.listTasks({ date, status: 'done', limit: 100 }),
   ]);
+
+  const openTasks = dayTasks.filter((t) => ['open', 'in_progress', 'rejected'].includes(t.status));
+  const finished = dayTasks.filter((t) => t.isDone);
+  const stats = {
+    total: dayTasks.length,
+    open: openTasks.length,
+    submitted: dayTasks.filter((t) => t.status === 'submitted').length,
+    verified: dayTasks.filter((t) => t.status === 'verified').length,
+    completed: finished.length,
+    photos: dayTasks.reduce((n, t) => n + (t.photos?.length || 0), 0),
+  };
 
   shell.innerHTML = '';
 
@@ -83,6 +96,17 @@ export async function dashboardView(container, params = {}) {
     crew.appendChild(row);
   }
   shell.appendChild(crew);
+
+  /* ---- what is still outstanding: the number above, made visible ---- */
+  if (openTasks.length) {
+    const still = el(`<div class="section">${sectionHead('Still open', openTasks.length)}</div>`);
+    for (const task of data.sortTasks(openTasks)) {
+      still.appendChild(taskCard(task, (t) => openTaskSheet(t, {
+        onChange: () => dashboardView(container, params),
+      }), { showAssignee: true }));
+    }
+    shell.appendChild(still);
+  }
 
   /* ---- what got finished, with the proof ---- */
   const feed = el(`<div class="section">${sectionHead('Finished today', finished.length)}</div>`);

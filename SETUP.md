@@ -248,7 +248,7 @@ what isn't:
 ```
  item                  | result                              | verdict
 -----------------------+-------------------------------------+---------
- schema version        | 2026.08.25-b                        | ok
+ schema version        | 2026.08.25-c                        | ok
  tables present        | 9 of 9                              | ok
  functions present     | 15 of 15                            | ok
  logins vs app records | 4 logins, 4 accounts, 4 memberships | ok
@@ -329,6 +329,13 @@ its job — that person is on a different team, or their access was turned off.
 **I ran an older version of this schema.** Run `supabase/reset.sql` once, then
 `supabase/schema.sql`. That clears the old tables — only do it while you have no
 real data.
+
+**A count says there's an open task but nothing is listed.** Older versions
+could leave a task behind when you deleted the block that made it — still
+counted, but with no block to show it under. Re-run `supabase/schema.sql`, then
+open **Overview**: everything still open is now listed under the count, so you
+can see exactly what it means and clear it. Deleting a block now takes its
+untouched tasks with it (anything photographed or handed in is kept).
 
 **One phone doesn't see another's changes.** The app subscribes to live updates
 and falls back to polling every 20 seconds if that fails, so it should catch up

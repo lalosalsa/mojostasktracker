@@ -344,6 +344,25 @@ check('flags work waiting on review', await page.locator('text=waiting on you').
 
 const feed = await page.locator('#view').innerText();
 check('completed work forms a feed on the overview', feed.includes('Finished today'));
+
+// a number on this screen must have a list behind it, or it cannot be checked
+const openTile = await page.evaluate(() => {
+  const tile = [...document.querySelectorAll('.stat')]
+    .find((t) => t.textContent.toUpperCase().includes('OPEN'));
+  return Number(tile?.querySelector('.n')?.textContent || -1);
+});
+const openListed = await page.evaluate(() => {
+  const heads = [...document.querySelectorAll('.section-head h2')];
+  const still = heads.find((h) => h.textContent.trim() === 'Still open');
+  if (!still) return 0;
+  let n = 0;
+  let node = still.closest('.section-head').nextElementSibling;
+  while (node) { if (node.classList.contains('task')) n += 1; node = node.nextElementSibling; }
+  return n;
+});
+check('the open count matches the tasks actually listed',
+  openTile === openListed, `tile says ${openTile}, ${openListed} listed`);
+check('and those open tasks are shown, not just counted', openListed > 0);
 check('the feed names who completed each task', feed.includes('✓ Jose P'));
 check('and the photo proof is right there in the feed',
   (await page.locator('#view img[data-path]').count()) > 0);

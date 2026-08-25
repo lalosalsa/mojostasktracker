@@ -110,6 +110,23 @@ select count(*) as closing_tasks_tomorrow from public.tasks t
   join public.blocks b on b.id = t.block_id
  where t.work_date = current_date + 1 and b.name = 'Closing';
 
+\echo '--- 12b. deleting a block takes its untouched tasks with it'
+select count(*) as tasks_before from public.tasks where work_date = current_date;
+select count(*) as lunch_tasks from public.tasks t
+  join public.blocks b on b.id = t.block_id where b.name = 'Lunch Rush';
+delete from public.blocks where name = 'Lunch Rush';
+select count(*) as lunch_tasks_after from public.tasks t
+  left join public.blocks b on b.id = t.block_id
+ where t.title in ('Wipe tables between rushes', 'Restock napkins');
+
+\echo '--- 12c. but work that was photographed or handed in is kept'
+-- Mop the floor was completed with a photo earlier in this file
+select count(*) as closing_done_kept from public.tasks
+ where title = 'Mop the floor' and status in ('submitted', 'verified');
+delete from public.blocks where name = 'Closing';
+select title, status, block_id is null as block_gone from public.tasks
+ where title = 'Mop the floor';
+
 \echo '--- 13. a task can be set to specific weekdays only'
 -- 2026-08-24 is a Monday, 25th a Tuesday, 26th a Wednesday
 insert into public.block_items (block_id, team_id, title, weekdays, created_by)

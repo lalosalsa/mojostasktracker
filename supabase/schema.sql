@@ -800,6 +800,41 @@ drop trigger if exists members_guard_trg on public.members;
 create trigger members_guard_trg before update on public.members
   for each row execute function public.members_guard();
 
+-- Deleting part of the day takes its unstarted work with it ------------------
+--
+-- tasks.block_id is "on delete set null", so removing a block used to leave its
+-- generated tasks behind with nothing to belong to: still counted as open, and
+-- only findable under "Anything else". Anything already photographed or handed
+-- in stays put — that is somebody's record of work done.
+
+create or replace function public.cleanup_block_tasks()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.tasks t
+   where t.block_id = old.id
+     and t.status in ('open', 'in_progress')
+     and not exists (select 1 from public.task_photos p where p.task_id = t.id);
+  return old;
+end $$;
+
+drop trigger if exists blocks_before_delete_trg on public.blocks;
+create trigger blocks_before_delete_trg before delete on public.blocks
+  for each row execute function public.cleanup_block_tasks();
+
+create or replace function public.cleanup_block_item_tasks()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.tasks t
+   where t.block_item_id = old.id
+     and t.status in ('open', 'in_progress')
+     and not exists (select 1 from public.task_photos p where p.task_id = t.id);
+  return old;
+end $$;
+
+drop trigger if exists block_items_before_delete_trg on public.block_items;
+create trigger block_items_before_delete_trg before delete on public.block_items
+  for each row execute function public.cleanup_block_item_tasks();
+
 -- Activity feed --------------------------------------------------------------
 
 create or replace function public.log_task_activity()
@@ -1265,7 +1300,7 @@ end
 $realtime$;
 
 insert into public.schema_meta (id, version, applied_at)
-values (1, '2026.08.25-b', now())
+values (1, '2026.08.25-c', now())
 on conflict (id) do update set version = excluded.version, applied_at = now();
 
 grant select on public.schema_meta to authenticated;
