@@ -330,5 +330,11 @@ its job — that person is on a different team, or their access was turned off.
 `supabase/schema.sql`. That clears the old tables — only do it while you have no
 real data.
 
+**One phone doesn't see another's changes.** The app subscribes to live updates
+and falls back to polling every 20 seconds if that fails, so it should catch up
+either way. If it never goes live, check **Database → Replication** (or
+Publications) in Supabase includes the `supabase_realtime` publication — the
+schema adds the tables to it, and prints a notice if it wasn't allowed to.
+
 **The app looks stale after a deploy.** Fully close it and reopen; the service
 worker picks up the new version on next launch.

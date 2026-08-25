@@ -2,6 +2,7 @@
 
 import { el, esc, fmtDate, timeAgo, initials, STATUS_LABELS, STATUS_CHIP, PRIORITY_CHIP } from '../ui.js';
 import { hydrateThumbs } from '../photos.js';
+import { state } from '../store.js';
 
 const CHECK = { verified: 'done', submitted: 'pending', in_progress: 'progress' };
 
@@ -96,6 +97,8 @@ export function emptyState(icon, title, message) {
 }
 
 export function skeletonList(n = 3) {
+  // a live repaint should not flash loading bars over what someone is reading
+  if (state.quietRefresh) return el('<div></div>');
   return el(`<div>${'<div class="skeleton"></div>'.repeat(n)}</div>`);
 }
 

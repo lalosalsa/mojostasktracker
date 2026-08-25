@@ -1233,23 +1233,37 @@ end
 $storage$;
 
 -- =============================================================================
---  REALTIME (live dashboard updates)
+--  REALTIME — so a change on one phone shows up on the others
+--  Every table the app watches has to be in the publication, and needs full
+--  replica identity or a delete event arrives without the row, which means it
+--  cannot be matched against the team filter.
 -- =============================================================================
-do $$
+do $realtime$
+declare
+  v_table text;
 begin
-  if not exists (select 1 from pg_publication_tables
-                  where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tasks') then
-    alter publication supabase_realtime add table public.tasks;
-  end if;
-  if not exists (select 1 from pg_publication_tables
-                  where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'activity') then
-    alter publication supabase_realtime add table public.activity;
-  end if;
-end $$;
+  foreach v_table in array array['tasks', 'activity', 'blocks', 'block_items',
+                                 'members', 'task_photos'] loop
+    if to_regclass('public.' || v_table) is null then continue; end if;
 
--- =============================================================================
---  Record that this file ran, and how far it got.
--- =============================================================================
+    execute format('alter table public.%I replica identity full', v_table);
+
+    if not exists (
+      select 1 from pg_publication_tables
+       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = v_table
+    ) then
+      begin
+        execute format('alter publication supabase_realtime add table public.%I', v_table);
+      exception when undefined_object then
+        raise notice 'No supabase_realtime publication on this project — live updates will fall back to polling.';
+      when insufficient_privilege then
+        raise notice 'Could not add % to the realtime publication; live updates fall back to polling.', v_table;
+      end;
+    end if;
+  end loop;
+end
+$realtime$;
+
 insert into public.schema_meta (id, version, applied_at)
 values (1, '2026.08.25-b', now())
 on conflict (id) do update set version = excluded.version, applied_at = now();

@@ -74,6 +74,20 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
   and photos stay in your records.
 - Reports: totals over any date range plus a CSV export for payroll or clients.
 
+**Everyone stays in sync**
+
+- A change on one phone reaches the others on its own: finish a task and it drops
+  off your crewmates' lists; the manager adds a job and it appears on their
+  screens; the Finished-today feed fills in as work comes in.
+- The subscription is scoped to the team you're in, so another location's
+  activity never wakes your phone.
+- When the websocket can't connect — flaky site signal, a restrictive network —
+  it falls back to polling, and reconnects on its own with backoff. A dot on the
+  refresh button shows which mode you're in.
+- Coming back to the app, or back online, pulls the latest immediately.
+- Background refreshes never interrupt: no loading skeletons over what you're
+  reading, and a failed one leaves the screen alone and tries again.
+
 **As an app**
 
 - Add to Home Screen on iPhone and Android; opens full-screen with its own icon.

@@ -155,6 +155,17 @@ set request.jwt.claims = '{"sub":"55555555-5555-5555-5555-555555555555"}';
 select public.whoami() -> 'account' ->> 'email' as account_rebuilt;
 select public.create_team('Recovered Shop', 'Legacy User') -> 'team' ->> 'name' as can_create_team;
 
+\echo '--- 19c. live updates: every watched table is published, with full rows'
+reset role;
+select tablename from pg_publication_tables
+ where pubname = 'supabase_realtime' and schemaname = 'public' order by tablename;
+select relname as table_name, relreplident as replica_identity
+  from pg_class
+ where relname in ('tasks','activity','blocks','block_items','members')
+   and relnamespace = 'public'::regnamespace
+ order by relname;
+set role authenticated;
+
 \echo '--- 20. a manager can still fix things from the SQL editor (no JWT)'
 reset role;
 reset request.jwt.claims;

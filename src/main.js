@@ -19,12 +19,12 @@ import { taskBoardView, openTaskEditor } from './views/tasksBoard.js';
 import { reportsView } from './views/reports.js';
 import { blocksView } from './views/blocks.js';
 import { openTeamSwitcher } from './views/teamSwitcher.js';
+import { startLiveSync, stopLiveSync, wakeLiveSync } from './live.js';
 
 /** Always resolve the live root — the shell is swapped out on sign-in/out, so
     a cached reference goes stale and later renders land in a detached tree. */
 const root = () => document.getElementById('app');
 let shell = null;
-let realtimeChannel = null;
 let mountedUserId = null;
 
 /* ------------------------------------------------------------------ chrome */
@@ -54,7 +54,9 @@ function buildShell() {
           <div class="sub" data-sub></div>
         </div>
         <span class="spacer"></span>
-        <button class="appbar-btn" data-refresh title="Refresh">⟳</button>
+        <button class="appbar-btn" data-refresh title="Refresh">
+          <span class="livedot" data-live></span>⟳
+        </button>
         <button class="appbar-btn team" data-teams title="Switch location">
           <span class="name" data-teamname>${esc(state.team?.name || 'Location')}</span>
           <span class="caret" aria-hidden="true">▾</span>
@@ -77,6 +79,7 @@ function buildShell() {
       shell = buildShell();
       registerRoutes();
       paintChrome();
+      watchLive();                       // re-subscribe to the team just opened
       navigate(isManager() ? '/dashboard' : '/today', { replace: true });
       resolve();
     },
@@ -113,6 +116,15 @@ function paintChrome() {
   shell.querySelector('[data-sub]').textContent =
     isManager() ? `${name} · Manager` : `${name}${state.team ? ` · ${state.team.name}` : ''}`;
 
+  const dot = shell.querySelector('[data-live]');
+  if (dot) {
+    const status = state.live?.status || 'idle';
+    dot.className = `livedot ${status}`;
+    dot.title = status === 'connected' ? 'Live — updates arrive on their own'
+      : status === 'connecting' ? 'Connecting…'
+        : 'Not live right now — checking every few seconds';
+  }
+
   const teamBtn = shell.querySelector('[data-teams]');
   if (teamBtn) {
     teamBtn.querySelector('[data-teamname]').textContent = state.team?.name || 'Location';
@@ -139,6 +151,10 @@ function guarded(view, { managersOnly = false } = {}) {
       await view(container, params);
       if (parse().path !== startedAt) return resolve();   // repaint what's current
     } catch (err) {
+      // A background repaint that fails — a dropped signal, a request cancelled
+      // by navigation — must not throw a banner over what someone is reading.
+      // Leave the screen as it is; the next poll will bring it up to date.
+      if (state.quietRefresh) return;
       console.error(err);
       container.innerHTML = '';
       container.appendChild(el(`
@@ -169,23 +185,18 @@ function registerRoutes() {
   setNotFound(() => navigate(isManager() ? '/dashboard' : '/today', { replace: true }));
 }
 
-/* ---------------------------------------------------------------- realtime */
+/* ---------------------------------------------------------------- live sync */
+
+/** Repaints the current screen without the loading skeletons flashing. */
+function liveRefresh({ quiet = true } = {}) {
+  const { path } = parse();
+  if (!shell || !path || path === '/') return;
+  if (quiet) setState({ quietRefresh: true });
+  return Promise.resolve(resolve()).finally(() => setState({ quietRefresh: false }));
+}
+
 function watchLive() {
-  realtimeChannel?.unsubscribe();
-  let pending = null;
-  const bump = () => {
-    clearTimeout(pending);
-    pending = setTimeout(() => {
-      const { path } = parse();
-      if (['/dashboard', '/review', '/today', '/tasks'].includes(path)) resolve();
-    }, 1200);
-  };
-  try {
-    realtimeChannel = sb()
-      .channel('tasks-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, bump)
-      .subscribe();
-  } catch { /* realtime is a nicety, never a blocker */ }
+  startLiveSync(liveRefresh);
 }
 
 /* -------------------------------------------------------------------- boot */
@@ -248,8 +259,7 @@ async function mountShell(session) {
 }
 
 function onSignedOut() {
-  realtimeChannel?.unsubscribe();
-  realtimeChannel = null;
+  stopLiveSync();
   setState({ session: null, account: null, me: null, team: null, teams: [] });
   shell = null;
   mountedUserId = null;
@@ -285,7 +295,7 @@ async function boot() {
 }
 
 /* ------------------------------------------------------------ app plumbing */
-window.addEventListener('online', () => { setState({ online: true }); paintChrome(); resolve(); });
+window.addEventListener('online', () => { setState({ online: true }); paintChrome(); wakeLiveSync(); });
 window.addEventListener('offline', () => { setState({ online: false }); paintChrome(); });
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -300,7 +310,7 @@ window.addEventListener('appinstalled', () => {
 // Keep "last seen" fresh while the app is open, so managers see who's working.
 setInterval(() => { if (shell && state.me?.status === 'active') data.touchLastSeen(); }, 5 * 60_000);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && shell && state.me?.status === 'active') resolve();
+  if (!document.hidden && shell && state.me?.status === 'active') wakeLiveSync();
 });
 
 subscribe(paintChrome);

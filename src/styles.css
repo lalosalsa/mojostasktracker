@@ -104,6 +104,15 @@ a { color: var(--brand); }
   font-size: 13px; font-weight: 600;
 }
 .appbar-btn:active { background: rgba(255, 255, 255, .3); }
+/* live-sync health: a quiet dot on the refresh button */
+.livedot {
+  width: 7px; height: 7px; border-radius: 999px; flex: none;
+  background: rgba(255, 255, 255, .45); margin-right: 5px;
+}
+.livedot.connected { background: #4ade80; }
+.livedot.connecting { background: #fbbf24; animation: pulse 1.2s ease-in-out infinite; }
+.livedot.offline { background: rgba(255, 255, 255, .35); }
+
 /* the location switcher: one line, never wide enough to squeeze the title */
 .appbar-btn.team { max-width: 124px; padding: 0 9px; gap: 4px; }
 .appbar-btn.team .name {

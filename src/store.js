@@ -11,6 +11,8 @@ export const state = {
   teams: [],     // every team they belong to
   route: '',
   online: navigator.onLine,
+  live: { status: 'idle', tables: [] },   // live-sync health, for the header dot
+  quietRefresh: false,                    // a background repaint: no skeletons
   pendingUploads: 0,
   installEvent: null,   // captured beforeinstallprompt
 };

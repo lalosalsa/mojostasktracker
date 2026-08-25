@@ -106,6 +106,7 @@ const context = await browser.newContext({
 
 let addedItem = null;
 let switchedTo = null;
+let taskFetches = 0;
 let verifiedTask = null;
 let rejectedNote = null;
 let identity = 'manager';
@@ -219,6 +220,7 @@ await context.route(`${SUPA}/**`, async (route) => {
     return json(route, { Key: `task-photos/${uploadedPath}` });
   }
   if (url.includes('/rest/v1/tasks')) {
+    if (method === 'GET') taskFetches += 1;
     if (method === 'PATCH') {
       const patch = JSON.parse(route.request().postData() || '{}');
       if (patch.status === 'verified') verifiedTask = patch;
@@ -431,6 +433,23 @@ await page.click('[data-tab="/me"]');
 await page.waitForSelector('text=Put this on your home screen', { timeout: 5000 });
 check('account screen explains home-screen install', true);
 await page.screenshot({ path: 'test/shots/09-account.png', fullPage: true });
+
+console.log('\nLive updates');
+check('the app shows a live-status dot', (await page.locator('[data-live]').count()) === 1);
+
+// realtime is unreachable in this harness, so the fallback is what must carry it.
+// Wait for the refetches rather than assuming a fixed window — this runs on a
+// machine that may be busy, and a fixed sleep here is how a test turns flaky.
+await page.evaluate(() => { window.__LIVE_POLL_MS__ = 400; });
+await page.evaluate(() => { location.hash = '#/today'; });
+await page.waitForTimeout(300);
+const before = taskFetches;
+await page.evaluate(() => { location.hash = '#/dashboard'; });
+
+const deadline = Date.now() + 15000;
+while (taskFetches < before + 2 && Date.now() < deadline) await page.waitForTimeout(200);
+check('it keeps refetching when realtime is down', taskFetches >= before + 2,
+  `only ${taskFetches - before} refetches before the deadline`);
 
 console.log('\nLocations');
 const switcher = page.locator('[data-teams]');
