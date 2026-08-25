@@ -5,6 +5,14 @@ import { hydrateThumbs } from '../photos.js';
 
 const CHECK = { verified: 'done', submitted: 'pending', in_progress: 'progress' };
 
+const clock = (t) => {
+  if (!t) return '';
+  const [h, m] = String(t).split(':').map(Number);
+  const suffix = h < 12 ? 'am' : 'pm';
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return m ? `${hour}:${String(m).padStart(2, '0')}${suffix}` : `${hour}${suffix}`;
+};
+
 export function taskCard(task, onOpen, { showAssignee = false } = {}) {
   const photos = task.photos || [];
   const thumbs = photos.slice(0, 3)
@@ -21,6 +29,7 @@ export function taskCard(task, onOpen, { showAssignee = false } = {}) {
         <span class="meta">
           <span class="chip ${STATUS_CHIP[task.status] || ''}">${esc(STATUS_LABELS[task.status])}</span>
           ${task.priority !== 'normal' ? `<span class="chip ${PRIORITY_CHIP[task.priority]}">${esc(task.priority)}</span>` : ''}
+          ${task.window_start ? `<span class="chip brand">⏱ ${esc(clock(task.window_start))}–${esc(clock(task.window_end))}</span>` : ''}
           ${task.location ? `<span class="chip">📍 ${esc(task.location)}</span>` : ''}
           ${task.requires_photo && !photos.length ? '<span class="chip info">📷 needs photo</span>' : ''}
           ${photos.length ? `<span class="chip">📷 ${photos.length}</span>` : ''}

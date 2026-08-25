@@ -2,11 +2,11 @@
 --  Mojo's Task Tracker — Supabase schema
 --
 --  Sign-up model:
---    · Everyone signs up with their name + email and verifies with a 6-digit
---      code (no passwords, no magic links).
+--    · Everyone signs up with their name, email and a password. No emails are
+--      sent at all (turn OFF "Confirm email" in Supabase — see SETUP.md).
 --    · A manager then creates a team and gets two codes to share.
 --    · Employees join that team by typing the code.
---    · Coming back later is the same email + a fresh code.
+--    · Coming back later is the same email + password.
 --
 --  Run this in Supabase Studio → SQL Editor → New query → Run.
 --  Re-runnable. If you ran an older version of this file first, run
@@ -35,7 +35,9 @@ create table if not exists public.members (
   email        text not null,
   name         text not null default '',
   role         text not null default 'employee' check (role in ('employee', 'manager')),
-  status       text not null default 'active'  check (status in ('active', 'disabled')),
+  status       text not null default 'active'
+               check (status in ('active', 'disabled', 'removed')),
+  schedule_name text not null default '',       -- how they appear on the Square export
   job_title    text not null default '',
   phone        text not null default '',
   created_at   timestamptz not null default now(),
@@ -75,6 +77,9 @@ create table if not exists public.tasks (
   work_date      date not null default current_date,
   due_date       date,
   template_id    bigint references public.task_templates(id) on delete set null,
+  window_id      bigint,                        -- set by the schedule generator
+  window_start   time,
+  window_end     time,
   notes          text not null default '',
   review_note    text not null default '',
   minutes_spent  integer,
@@ -89,6 +94,45 @@ create index if not exists tasks_assigned_date_idx on public.tasks (assigned_to,
 create index if not exists tasks_status_idx        on public.tasks (status);
 create unique index if not exists tasks_template_day_idx
   on public.tasks (template_id, work_date) where template_id is not null;
+create unique index if not exists tasks_window_day_person_idx
+  on public.tasks (window_id, work_date, assigned_to) where window_id is not null;
+
+-- A shift imported from the schedule (Square export, or typed in by hand).
+create table if not exists public.shifts (
+  id          bigint generated always as identity primary key,
+  team_id     uuid not null references public.teams(id) on delete cascade,
+  member_id   uuid references public.members(id) on delete set null,
+  person_name text not null,                    -- as written on the schedule
+  work_date   date not null,
+  starts_at   time not null,
+  ends_at     time not null,
+  source      text not null default 'import',
+  created_at  timestamptz not null default now()
+);
+create index if not exists shifts_team_date_idx on public.shifts (team_id, work_date);
+create unique index if not exists shifts_unique_idx
+  on public.shifts (team_id, work_date, lower(person_name), starts_at);
+
+-- "This needs doing between 2pm and 4pm." The generator turns each of these
+-- into real tasks for whoever is on shift in that window.
+create table if not exists public.task_windows (
+  id             bigint generated always as identity primary key,
+  team_id        uuid not null references public.teams(id) on delete cascade,
+  title          text not null,
+  description    text not null default '',
+  location       text not null default '',
+  priority       text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
+  requires_photo boolean not null default true,
+  starts_at      time not null,
+  ends_at        time not null,
+  recurrence     text not null default 'daily' check (recurrence in ('daily', 'weekdays', 'weekly')),
+  weekday        smallint check (weekday between 0 and 6),
+  assign_mode    text not null default 'everyone' check (assign_mode in ('everyone', 'one')),
+  active         boolean not null default true,
+  created_by     uuid references public.members(id) on delete set null,
+  created_at     timestamptz not null default now()
+);
+create index if not exists task_windows_team_idx on public.task_windows (team_id);
 
 create table if not exists public.task_photos (
   id           bigint generated always as identity primary key,
@@ -236,8 +280,8 @@ declare
   v_member public.members;
 begin
   select * into v_member from public.members where id = auth.uid();
-  if not found then raise exception 'Verify your email first'; end if;
-  if v_member.team_id is not null then
+  if not found then raise exception 'Finish signing up first'; end if;
+  if v_member.team_id is not null and v_member.status <> 'removed' then
     raise exception 'You are already on a team. Leave it before starting another.';
   end if;
   if coalesce(trim(p_team_name), '') = '' then raise exception 'Give your team a name'; end if;
@@ -278,8 +322,8 @@ declare
   v_member public.members;
 begin
   select * into v_member from public.members where id = auth.uid();
-  if not found then raise exception 'Verify your email first'; end if;
-  if v_member.team_id is not null then
+  if not found then raise exception 'Finish signing up first'; end if;
+  if v_member.team_id is not null and v_member.status <> 'removed' then
     raise exception 'You are already on a team.';
   end if;
 
@@ -295,6 +339,7 @@ begin
   update public.members
      set team_id = v_team.id,
          role    = v_role,
+         status  = 'active',
          name    = coalesce(nullif(trim(p_your_name), ''), nullif(name, ''), split_part(email, '@', 1))
    where id = auth.uid();
   perform set_config('app.member_guard_bypass', '0', true);
@@ -348,6 +393,224 @@ begin
    returning * into v_team;
   return row_to_json(v_team);
 end $$;
+
+/** Take someone off the team. Their finished work and photos stay, so the
+    manager keeps the history; the person loses all access immediately and can
+    join another team (or be re-added) with a code. */
+create or replace function public.remove_member(p_member_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+  if p_member_id = auth.uid() then raise exception 'You cannot remove yourself'; end if;
+  if not exists (select 1 from public.members
+                  where id = p_member_id and team_id = public.my_team()) then
+    raise exception 'That person is not on your team';
+  end if;
+
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members set status = 'removed', role = 'employee' where id = p_member_id;
+  perform set_config('app.member_guard_bypass', '0', true);
+
+  -- hand their unfinished work back to the pool
+  update public.tasks set assigned_to = null
+   where assigned_to = p_member_id and status in ('open', 'in_progress', 'rejected');
+  delete from public.shifts where member_id = p_member_id and work_date >= current_date;
+end $$;
+
+/** Put someone back on the team after they were removed. */
+create or replace function public.restore_member(p_member_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members set status = 'active'
+   where id = p_member_id and team_id = public.my_team();
+  perform set_config('app.member_guard_bypass', '0', true);
+end $$;
+
+-- =============================================================================
+--  SCHEDULES
+--  A manager imports the shift schedule, defines what needs doing in which
+--  time window, and the generator works out who gets what.
+-- =============================================================================
+
+/** Loose name matching so "JOSE PEREZ", "jose perez" and "Perez, Jose" line up. */
+create or replace function public.name_key(p_name text)
+returns text language sql immutable as $$
+  select regexp_replace(lower(coalesce(p_name, '')), '[^a-z]', '', 'g');
+$$;
+
+/** Finds the team member a schedule name refers to, if any. */
+create or replace function public.match_member(p_team uuid, p_name text)
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.members
+   where team_id = p_team and status = 'active'
+     and (
+       public.name_key(schedule_name) = public.name_key(p_name)
+       or public.name_key(name) = public.name_key(p_name)
+       -- "Perez, Jose" written the other way round
+       or public.name_key(name) = public.name_key(
+            split_part(p_name, ',', 2) || split_part(p_name, ',', 1))
+     )
+   order by (public.name_key(schedule_name) = public.name_key(p_name)) desc
+   limit 1;
+$$;
+
+/**
+ * Saves one imported shift. Re-importing the same schedule updates in place
+ * rather than duplicating, so a manager can re-upload a corrected export.
+ */
+create or replace function public.upsert_shift(
+  p_person_name text,
+  p_work_date   date,
+  p_starts_at   time,
+  p_ends_at     time,
+  p_member_id   uuid default null
+) returns bigint language plpgsql security definer set search_path = public as $$
+declare
+  v_team uuid := public.my_team();
+  v_id   bigint;
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+  if v_team is null then raise exception 'You are not on a team'; end if;
+  if coalesce(trim(p_person_name), '') = '' then raise exception 'Every shift needs a name'; end if;
+  if p_ends_at <= p_starts_at then
+    raise exception 'Shift for % ends before it starts', p_person_name;
+  end if;
+
+  insert into public.shifts (team_id, member_id, person_name, work_date, starts_at, ends_at)
+  values (v_team,
+          coalesce(p_member_id, public.match_member(v_team, p_person_name)),
+          trim(p_person_name), p_work_date, p_starts_at, p_ends_at)
+  on conflict (team_id, work_date, lower(person_name), starts_at) do update
+    set ends_at   = excluded.ends_at,
+        member_id = coalesce(excluded.member_id, public.shifts.member_id)
+  returning id into v_id;
+  return v_id;
+end $$;
+
+/** Ties a schedule spelling to a person, then back-fills their shifts. */
+create or replace function public.link_schedule_name(p_member_id uuid, p_schedule_name text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_team uuid := public.my_team();
+begin
+  if not public.is_manager() then raise exception 'Managers only'; end if;
+
+  perform set_config('app.member_guard_bypass', '1', true);
+  update public.members set schedule_name = trim(p_schedule_name)
+   where id = p_member_id and team_id = v_team;
+  perform set_config('app.member_guard_bypass', '0', true);
+
+  update public.shifts set member_id = p_member_id
+   where team_id = v_team
+     and member_id is null
+     and public.name_key(person_name) = public.name_key(p_schedule_name);
+end $$;
+
+/**
+ * Turns the day's shifts + time windows into real, assigned tasks.
+ *
+ *   assign_mode 'everyone' → one task each for everyone working that window
+ *   assign_mode 'one'      → a single task, given to whoever is working the
+ *                            most of the window (ties broken by who has the
+ *                            fewest tasks so far that day)
+ *
+ * Idempotent: running it twice never doubles up, and it skips anyone whose
+ * task was already created — so a manager can re-run it after a late edit.
+ */
+create or replace function public.generate_scheduled_tasks(p_date date default current_date)
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  v_team    uuid := public.my_team();
+  v_window  public.task_windows;
+  v_member  uuid;
+  v_rows    integer;
+  v_count   integer := 0;
+begin
+  if v_team is null then return 0; end if;
+
+  for v_window in
+    select * from public.task_windows w
+     where w.active and w.team_id = v_team
+       and (
+         w.recurrence = 'daily'
+         or (w.recurrence = 'weekdays' and extract(isodow from p_date) between 1 and 5)
+         or (w.recurrence = 'weekly' and extract(dow from p_date) = coalesce(w.weekday, 1))
+       )
+  loop
+    if v_window.assign_mode = 'one' then
+      select s.member_id into v_member
+        from public.shifts s
+        where s.team_id = v_team and s.work_date = p_date and s.member_id is not null
+          and s.starts_at < v_window.ends_at and s.ends_at > v_window.starts_at
+        order by (least(s.ends_at, v_window.ends_at) - greatest(s.starts_at, v_window.starts_at)) desc,
+                 (select count(*) from public.tasks t
+                   where t.assigned_to = s.member_id and t.work_date = p_date) asc,
+                 s.starts_at
+        limit 1;
+
+      if v_member is not null
+         and not exists (select 1 from public.tasks t
+                          where t.window_id = v_window.id and t.work_date = p_date) then
+        insert into public.tasks (team_id, title, description, location, priority, requires_photo,
+                                  assigned_to, created_by, work_date, due_date,
+                                  window_id, window_start, window_end, status)
+        values (v_team, v_window.title, v_window.description, v_window.location, v_window.priority,
+                v_window.requires_photo, v_member, v_window.created_by, p_date, p_date,
+                v_window.id, v_window.starts_at, v_window.ends_at, 'open');
+        v_count := v_count + 1;
+      end if;
+    else
+      insert into public.tasks (team_id, title, description, location, priority, requires_photo,
+                                assigned_to, created_by, work_date, due_date,
+                                window_id, window_start, window_end, status)
+      select distinct v_team, v_window.title, v_window.description, v_window.location,
+             v_window.priority, v_window.requires_photo, s.member_id, v_window.created_by,
+             p_date, p_date, v_window.id, v_window.starts_at, v_window.ends_at, 'open'
+        from public.shifts s
+       where s.team_id = v_team and s.work_date = p_date and s.member_id is not null
+         and s.starts_at < v_window.ends_at and s.ends_at > v_window.starts_at
+         and not exists (
+           select 1 from public.tasks t
+            where t.window_id = v_window.id and t.work_date = p_date and t.assigned_to = s.member_id
+         );
+      get diagnostics v_rows = row_count;
+      v_count := v_count + v_rows;
+    end if;
+  end loop;
+
+  return v_count;
+end $$;
+
+/** The day's schedule, with each person's task count — the manager's view. */
+create or replace function public.day_schedule(p_date date default current_date)
+returns table (
+  shift_id bigint, member_id uuid, person_name text, matched boolean,
+  starts_at time, ends_at time, task_count bigint, done_count bigint
+) language sql stable security definer set search_path = public as $$
+  select s.id, s.member_id,
+         coalesce(m.name, s.person_name) as person_name,
+         s.member_id is not null as matched,
+         s.starts_at, s.ends_at,
+         (select count(*) from public.tasks t
+           where t.assigned_to = s.member_id and t.work_date = p_date)                    as task_count,
+         (select count(*) from public.tasks t
+           where t.assigned_to = s.member_id and t.work_date = p_date
+             and t.status in ('submitted', 'verified'))                                   as done_count
+    from public.shifts s
+    left join public.members m on m.id = s.member_id
+   where s.team_id = public.my_team() and s.work_date = p_date and public.is_manager()
+   order by s.starts_at, person_name;
+$$;
+
+/** My own shift for a day, so the app can show "you're on 8:00–4:00". */
+create or replace function public.my_shift(p_date date default current_date)
+returns table (starts_at time, ends_at time)
+language sql stable security definer set search_path = public as $$
+  select s.starts_at, s.ends_at from public.shifts s
+   where s.member_id = auth.uid() and s.work_date = p_date
+   order by s.starts_at;
+$$;
 
 -- =============================================================================
 --  TASK RULES (enforced in the database, not just the UI)
@@ -503,6 +766,8 @@ alter table public.tasks          enable row level security;
 alter table public.task_photos    enable row level security;
 alter table public.task_templates enable row level security;
 alter table public.activity       enable row level security;
+alter table public.shifts         enable row level security;
+alter table public.task_windows   enable row level security;
 
 -- teams: you can read your own team. Codes change only through the RPCs above.
 drop policy if exists teams_select on public.teams;
@@ -588,6 +853,26 @@ create policy templates_select on public.task_templates for select to authentica
 
 drop policy if exists templates_manager on public.task_templates;
 create policy templates_manager on public.task_templates for all to authenticated
+  using (public.is_manager() and team_id = public.my_team())
+  with check (public.is_manager() and team_id = public.my_team());
+
+-- shifts: you can see your own; a manager sees the whole schedule
+drop policy if exists shifts_select on public.shifts;
+create policy shifts_select on public.shifts for select to authenticated
+  using (team_id = public.my_team() and (public.is_manager() or member_id = public.me()));
+
+drop policy if exists shifts_manager on public.shifts;
+create policy shifts_manager on public.shifts for all to authenticated
+  using (public.is_manager() and team_id = public.my_team())
+  with check (public.is_manager() and team_id = public.my_team());
+
+-- task windows: everyone can read them (they explain the day), managers edit
+drop policy if exists windows_select on public.task_windows;
+create policy windows_select on public.task_windows for select to authenticated
+  using (team_id = public.my_team());
+
+drop policy if exists windows_manager on public.task_windows;
+create policy windows_manager on public.task_windows for all to authenticated
   using (public.is_manager() and team_id = public.my_team())
   with check (public.is_manager() and team_id = public.my_team());
 
@@ -724,7 +1009,8 @@ $$;
 
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on
-  public.tasks, public.task_photos, public.task_templates, public.members to authenticated;
+  public.tasks, public.task_photos, public.task_templates, public.members,
+  public.shifts, public.task_windows to authenticated;
 grant select on public.teams, public.activity to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 alter default privileges in schema public grant usage, select on sequences to authenticated;
@@ -747,6 +1033,15 @@ grant execute on function public.employee_day_stats(date)              to authen
 grant execute on function public.daily_trend(date, date)               to authenticated;
 grant execute on function public.range_stats(date, date, uuid)         to authenticated;
 grant execute on function public.touch_last_seen()                     to authenticated;
+grant execute on function public.remove_member(uuid)                   to authenticated;
+grant execute on function public.restore_member(uuid)                  to authenticated;
+grant execute on function public.upsert_shift(text, date, time, time, uuid) to authenticated;
+grant execute on function public.link_schedule_name(uuid, text)        to authenticated;
+grant execute on function public.generate_scheduled_tasks(date)        to authenticated;
+grant execute on function public.day_schedule(date)                    to authenticated;
+grant execute on function public.my_shift(date)                        to authenticated;
+grant execute on function public.match_member(uuid, text)              to authenticated;
+grant execute on function public.name_key(text)                        to authenticated;
 
 -- =============================================================================
 --  STORAGE — private bucket for the photo proof

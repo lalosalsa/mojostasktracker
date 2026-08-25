@@ -15,6 +15,8 @@ drop table if exists public.activity        cascade;
 drop table if exists public.task_photos     cascade;
 drop table if exists public.tasks           cascade;
 drop table if exists public.task_templates  cascade;
+drop table if exists public.task_windows    cascade;
+drop table if exists public.shifts          cascade;
 drop table if exists public.member_devices  cascade;   -- from an interim version
 drop table if exists public.members         cascade;
 drop table if exists public.invites         cascade;   -- from the first version
@@ -51,6 +53,16 @@ drop function if exists public.employee_day_stats(date)         cascade;
 drop function if exists public.daily_trend(date, date)          cascade;
 drop function if exists public.range_stats(date, date, uuid)    cascade;
 drop function if exists public.touch_last_seen()                cascade;
+drop function if exists public.remove_member(uuid)              cascade;
+drop function if exists public.restore_member(uuid)             cascade;
+drop function if exists public.upsert_shift(text, date, time, time, uuid) cascade;
+drop function if exists public.link_schedule_name(uuid, text)   cascade;
+drop function if exists public.generate_scheduled_tasks(date)   cascade;
+drop function if exists public.day_schedule(date)               cascade;
+drop function if exists public.my_shift(date)                   cascade;
+drop function if exists public.match_member(uuid, text)         cascade;
+drop function if exists public.name_key(text)                   cascade;
+drop function if exists public.guard_bypassed()                 cascade;
 drop function if exists public.tasks_before_insert()            cascade;
 drop function if exists public.tasks_before_update()            cascade;
 drop function if exists public.members_guard()                  cascade;

@@ -23,6 +23,7 @@ function unwrap({ data, error }) {
 const TASK_FIELDS = `
   id, team_id, title, description, location, status, priority, requires_photo,
   work_date, due_date, notes, review_note, minutes_spent, template_id,
+  window_id, window_start, window_end,
   created_at, started_at, completed_at, reviewed_at,
   assigned_to, created_by, reviewed_by,
   assignee:members!tasks_assigned_to_fkey (id, name),
@@ -50,6 +51,44 @@ export async function waitForMe(tries = 6) {
 }
 
 export const setMyName = (name) => sb().rpc('set_my_name', { p_name: name }).then(unwrap);
+
+/* ---------------------------------------------------------------- sign in */
+export async function signUp({ name, email, password }) {
+  const { data, error } = await sb().auth.signUp({
+    email: email.trim().toLowerCase(),
+    password,
+    options: { data: { full_name: name.trim() } },
+  });
+  if (error) throw new Error(friendlyError(error));
+  if (!data.session) {
+    throw new Error(
+      'Account created, but email confirmation is still switched on in Supabase. ' +
+      'Turn off "Confirm email" under Authentication → Sign In / Providers → Email.'
+    );
+  }
+  return data;
+}
+
+export async function signIn({ email, password }) {
+  const { data, error } = await sb().auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  if (error) throw new Error(friendlyError(error));
+  return data;
+}
+
+export const changePassword = async (password) => {
+  const { error } = await sb().auth.updateUser({ password });
+  if (error) throw new Error(friendlyError(error));
+};
+
+export const sendPasswordReset = async (email) => {
+  const { error } = await sb().auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+    redirectTo: window.location.origin,
+  });
+  if (error) throw new Error(friendlyError(error));
+};
 
 export const createTeam = (teamName, yourName) =>
   sb().rpc('create_team', { p_team_name: teamName, p_your_name: yourName || '' }).then(unwrap);
@@ -111,9 +150,12 @@ function decorate(row) {
 }
 
 export function sortTasks(tasks) {
+  // Time-boxed work leads, in clock order — that's the order the day happens in.
+  const when = (t) => t.window_start || '99:99';
   return [...tasks].sort(
     (a, b) =>
       (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) ||
+      when(a).localeCompare(when(b)) ||
       (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
       b.id - a.id
   );
@@ -258,7 +300,75 @@ export const listActiveEmployees = async () =>
 export const updateMember = (id, patch) =>
   sb().from('members').update(patch).eq('id', id).select().single().then(unwrap);
 
-export const removeMember = (id) => sb().from('members').delete().eq('id', id).then(unwrap);
+/** Takes someone off the team; their finished work and photos stay put. */
+export const removeMember = (id) => sb().rpc('remove_member', { p_member_id: id }).then(unwrap);
+
+export const restoreMember = (id) => sb().rpc('restore_member', { p_member_id: id }).then(unwrap);
+
+/* ----------------------------------------------------------- schedules */
+
+export const daySchedule = async (date = todayStr()) =>
+  unwrap(await sb().rpc('day_schedule', { p_date: date })) || [];
+
+export const myShift = async (date = todayStr()) =>
+  (unwrap(await sb().rpc('my_shift', { p_date: date })) || [])[0] || null;
+
+export const generateScheduledTasks = (date = todayStr()) =>
+  sb().rpc('generate_scheduled_tasks', { p_date: date }).then(({ data }) => data || 0, () => 0);
+
+export const linkScheduleName = (memberId, scheduleName) =>
+  sb().rpc('link_schedule_name', { p_member_id: memberId, p_schedule_name: scheduleName }).then(unwrap);
+
+/** Saves imported shifts one at a time so a single bad row can't lose the rest. */
+export async function importShifts(shifts, onProgress) {
+  let saved = 0;
+  const failures = [];
+  for (let i = 0; i < shifts.length; i += 1) {
+    const shift = shifts[i];
+    try {
+      unwrap(await sb().rpc('upsert_shift', {
+        p_person_name: shift.person,
+        p_work_date: shift.date,
+        p_starts_at: shift.start,
+        p_ends_at: shift.end,
+      }));
+      saved += 1;
+    } catch (err) {
+      failures.push({ shift, message: err.message });
+    }
+    onProgress?.(i + 1, shifts.length);
+  }
+  return { saved, failures };
+}
+
+export const deleteShiftsForDate = (date) =>
+  sb().from('shifts').delete().eq('work_date', date).then(unwrap);
+
+/* ------------------------------------------------------- time windows */
+
+export const listWindows = async () =>
+  unwrap(await sb().from('task_windows').select('*').order('starts_at')) || [];
+
+export async function createWindow(fields, teamId) {
+  return unwrap(await sb().from('task_windows').insert({
+    team_id: teamId,
+    title: fields.title,
+    description: fields.description || '',
+    location: fields.location || '',
+    priority: fields.priority || 'normal',
+    requires_photo: fields.requiresPhoto !== false,
+    starts_at: fields.startsAt,
+    ends_at: fields.endsAt,
+    recurrence: fields.recurrence || 'daily',
+    weekday: fields.recurrence === 'weekly' ? Number(fields.weekday ?? 1) : null,
+    assign_mode: fields.assignMode || 'everyone',
+  }).select().single());
+}
+
+export const updateWindow = (id, patch) =>
+  sb().from('task_windows').update(patch).eq('id', id).select().single().then(unwrap);
+
+export const deleteWindow = (id) => sb().from('task_windows').delete().eq('id', id).then(unwrap);
 
 /* ---------------------------------------------------------------- templates */
 export const listTemplates = async () =>

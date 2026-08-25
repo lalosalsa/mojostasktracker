@@ -4,6 +4,7 @@ import { el, esc, sheet, toast, busy, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { state } from '../store.js';
 import { taskCard, progressRing, statTile, emptyState, skeletonList, sectionHead } from './components.js';
+import { fmtClock } from './schedule.js';
 import { openTaskSheet } from './taskSheet.js';
 import { pickPhotos, uploadFiles } from '../photos.js';
 
@@ -20,6 +21,7 @@ export async function todayView(container) {
   const today = data.todayStr();
   await data.ensureTodaysTasks(today);
   data.touchLastSeen();
+  const shift = await data.myShift(today).catch(() => null);
 
   let tasks;
   try {
@@ -49,6 +51,7 @@ export async function todayView(container) {
       <div class="hero-text">
         <h2>${greeting}, ${esc(firstName)}</h2>
         <p>${doneCount} of ${mine.length || 0} task${mine.length === 1 ? '' : 's'} done · ${esc(fmtDate(today))}</p>
+        ${shift ? `<p class="small" style="color:var(--brand);font-weight:650;margin-top:4px">🗓 You're on ${esc(fmtClock(shift.starts_at))} – ${esc(fmtClock(shift.ends_at))}</p>` : ''}
       </div>
     </div>`);
   hero.appendChild(progressRing(doneCount, mine.length));

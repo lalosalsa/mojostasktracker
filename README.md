@@ -20,12 +20,12 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 
 **Signing up**
 
-- Name + email, verified with a **6-digit code** in the email (no passwords, no
-  magic links). The phone then stays signed in.
+- Name, email and a password. No emails are sent at all — no codes, no links, no
+  confirmation. The phone stays signed in afterwards.
 - A manager creates a team and gets a **crew code** to share, plus a separate
   **manager code** for anyone who should also review work.
-- Everyone else joins by typing that code. Anyone can come back later from any
-  device with the same email and a fresh code.
+- Everyone else joins by typing that code. Coming back on any device is the same
+  email and password.
 - Teams are sealed off from each other: no code, no access.
 
 **For the crew**
@@ -46,9 +46,24 @@ only backend (Postgres + Auth + Storage). No server to run or maintain.
 - Task board: assign work to anyone, for any day, with priority and location.
 - Recurring checklists: daily / weekday / weekly jobs that appear automatically
   each morning.
-- Team: share or re-issue the join code, promote another manager, edit names, or
-  turn off someone's access instantly.
+- Team: share or re-issue the join code, promote someone to manager, edit names,
+  turn off access, or remove someone from the team entirely — their finished work
+  and photos stay in your records.
+- Schedule: import the shift roster from Square (.xlsx or .csv), define what has
+  to happen in which time window, and hand the work to whoever is on shift then.
 - Reports: totals over any date range plus a CSV export for payroll or clients.
+
+**Scheduling from Square**
+
+- Import the roster as .xlsx or .csv. The reader is built in — no library, no
+  upload to anyone else's server; the file is parsed on the phone.
+- It guesses the employee/date/time columns and shows a preview plus every row it
+  skipped, so a bad export is visible rather than silent.
+- "Time blocks" describe work that has to happen in a window ("restock between 2
+  and 4"). Handing out tasks matches each block against who is actually on shift,
+  either to everyone working then or to the single best-covered person.
+- Re-running only adds what's missing, so a late schedule change is one tap.
+- Names spelled differently in Square get linked to a person once and remembered.
 
 **As an app**
 
@@ -113,6 +128,7 @@ team.
 
 ```
 src/                 app source (plain ES modules, no framework)
+  spreadsheet.js     .xlsx/.csv reader built on DecompressionStream
   main.js            boot, session handling, header + tabs, routing
   data.js            every Supabase query in one place
   supabase.js        client setup and human-readable error messages

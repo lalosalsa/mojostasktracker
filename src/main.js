@@ -18,6 +18,7 @@ import { teamView, } from './views/team.js';
 import { taskBoardView, openTaskEditor } from './views/tasksBoard.js';
 import { recurringView } from './views/recurring.js';
 import { reportsView } from './views/reports.js';
+import { scheduleView, windowsView } from './views/schedule.js';
 
 /** Always resolve the live root — the shell is swapped out on sign-in/out, so
     a cached reference goes stale and later renders land in a detached tree. */
@@ -33,18 +34,17 @@ const TABS = {
     { path: '/history', label: 'History', icon: '🗓' },
     { path: '/me', label: 'Me', icon: '👤' },
   ],
-  admin: [
+  manager: [
     { path: '/dashboard', label: 'Overview', icon: '📊' },
     { path: '/review', label: 'Review', icon: '🔍' },
-    { path: '/tasks', label: 'Tasks', icon: '📋' },
+    { path: '/schedule', label: 'Schedule', icon: '🗓' },
     { path: '/team', label: 'Team', icon: '👷' },
     { path: '/me', label: 'More', icon: '⋯' },
   ],
 };
 
 function buildShell() {
-  const admin = isManager();
-  const tabs = admin ? TABS.admin : TABS.employee;
+  const tabs = isManager() ? TABS.manager : TABS.employee;
 
   const node = el(`
     <div class="app">
@@ -93,6 +93,8 @@ function paintChrome() {
     '/team': 'Your team',
     '/recurring': 'Recurring tasks',
     '/reports': 'Reports',
+    '/schedule': 'Schedule',
+    '/windows': 'Time blocks',
   };
   shell.querySelector('[data-title]').textContent = titles[path] || state.team?.name || APP_NAME;
   const name = state.me?.name || state.me?.email || '';
@@ -139,6 +141,8 @@ function registerRoutes() {
   route('/team', guarded(teamView, { managersOnly: true }));
   route('/recurring', guarded(recurringView, { managersOnly: true }));
   route('/reports', guarded(reportsView, { managersOnly: true }));
+  route('/schedule', guarded(scheduleView, { managersOnly: true }));
+  route('/windows', guarded(windowsView, { managersOnly: true }));
   route('/new-task', guarded(async (container) => {
     await taskBoardView(container, {});
     openTaskEditor(null, () => resolve());

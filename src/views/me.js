@@ -1,6 +1,6 @@
 /* Profile, install help, and (for managers) workspace settings. */
 
-import { el, esc, toast, busy, confirmSheet, initials } from '../ui.js';
+import { el, esc, toast, busy, confirmSheet, sheet, initials } from '../ui.js';
 import * as data from '../data.js';
 import { state, isManager, setState } from '../store.js';
 import { sb } from '../supabase.js';
@@ -88,6 +88,9 @@ export async function meView(container) {
       <div class="card mt">
         <h2 style="font-size:15px">Manager tools</h2>
         <div class="btn-row mt">
+          <button class="btn ghost" data-go="/schedule">🗓 Schedule</button>
+          <button class="btn ghost" data-go="/windows">⏱ Time blocks</button>
+          <button class="btn ghost" data-go="/tasks">📋 All tasks</button>
           <button class="btn ghost" data-go="/recurring">🔁 Recurring tasks</button>
           <button class="btn ghost" data-go="/reports">📊 Reports &amp; export</button>
         </div>
@@ -102,8 +105,10 @@ export async function meView(container) {
       <h2 style="font-size:15px">Account</h2>
       <p class="small muted mt">Signed in as ${esc(me.email)}${state.team ? ` on ${esc(state.team.name)}` : ''}.
          This device stays signed in until you sign out.</p>
+      <button class="btn ghost block mt" data-password>Change password</button>
       <button class="btn ghost block mt" data-signout>Sign out</button>
     </div>`);
+  account.querySelector('[data-password]').onclick = () => openPasswordSheet();
   account.querySelector('[data-signout]').onclick = async () => {
     const yes = await confirmSheet({
       title: 'Sign out?',
@@ -136,4 +141,39 @@ export async function meView(container) {
     };
     container.appendChild(reset);
   }
+}
+
+
+/** Change your own password without leaving the app. */
+function openPasswordSheet() {
+  const body = el(`
+    <div>
+      <div class="field">
+        <label for="pw-new">New password</label>
+        <input class="input" id="pw-new" type="password" autocomplete="new-password"
+               placeholder="At least 8 characters">
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label for="pw-again">Type it again</label>
+        <input class="input" id="pw-again" type="password" autocomplete="new-password">
+      </div>
+    </div>`);
+  const foot = el(`<div style="display:flex;gap:10px;width:100%">
+    <button class="btn ghost" style="flex:1" data-close>Cancel</button>
+    <button class="btn" style="flex:1" data-save>Save</button>
+  </div>`);
+  const s = sheet({ title: 'Change password', body, footer: foot });
+
+  foot.querySelector('[data-save]').onclick = async (e) => {
+    const next = body.querySelector('#pw-new').value;
+    const again = body.querySelector('#pw-again').value;
+    if (next.length < 8) return toast('Use at least 8 characters', 'error');
+    if (next !== again) return toast("Those don't match", 'error');
+    busy(e.currentTarget);
+    try {
+      await data.changePassword(next);
+      s.close();
+      toast('Password changed', 'ok');
+    } catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
+  };
 }

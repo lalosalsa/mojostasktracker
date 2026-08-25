@@ -22,96 +22,34 @@ storage) and **Vercel** (hosts the app). Budget about 20 minutes.
 That one file creates every table, the security rules, the photo bucket, and the
 automatic daily-checklist logic. It's safe to re-run later if you pull updates.
 
-## 3. Make Supabase send codes instead of links
+## 3. Turn off email confirmation
 
-**This is the step that trips everyone up.** Supabase sends a magic *link* by
-default, and a link opens the phone's browser instead of the installed app. The
-app asks for a 6-digit code — you just have to put the code in the email.
+Sign-in is email + password, and the app sends **no email at all**. Supabase
+wants to email a confirmation link by default, so switch that off or nobody can
+finish signing up.
 
-The catch: **Supabase uses two different templates**, and you need `{{ .Token }}`
-in *both*, or new sign-ups still get a link.
+1. **Authentication** → **Sign In / Providers** → **Email**.
+2. Make sure **Enable email provider** is on.
+3. Turn **Confirm email** **OFF**.
+4. Leave **Allow new users to sign up** on — that's how your crew creates
+   accounts. Getting into *your* team still needs the team code from step 8.
+5. Save.
 
-| Who gets it | Template to edit |
-|---|---|
-| Someone signing up for the first time | **Confirm signup** |
-| Someone signing back in later | **Magic Link** |
+If you miss this, sign-up appears to work but the app will tell you email
+confirmation is still switched on.
 
-1. **Authentication** → **Emails** (older projects: *Email Templates*).
-2. Open **Confirm signup**, and replace the body with:
+## 4. Email (optional now)
 
-   ```html
-   <h2>Your code</h2>
-   <p>Enter this in the app to finish signing up:</p>
-   <h1 style="letter-spacing:8px;font-family:monospace">{{ .Token }}</h1>
-   <p>It expires in 60 minutes. If you didn't ask for it, ignore this email.</p>
-   ```
+You don't need SMTP for day-to-day use — no codes, no links, no confirmation
+emails. The one thing that still needs it is **Forgot password**.
 
-3. Open **Magic Link** and use the same body (change the wording to "Enter this
-   in the app to sign in" if you like).
-4. Save both.
+Until you set it up, a forgotten password is fixed by a manager: remove the
+person from the team, and they sign up again with a fresh password.
 
-Then check **Authentication → Sign In / Providers → Email** is enabled, and leave
-**Allow new users to sign up** on — that's how your crew creates their accounts.
-Getting into *your* team still requires the team code from step 8.
-
-> Already sent yourself a link email while testing? Fix the templates, then
-> request a new code — old emails keep the old format.
-
-## 4. Set up real email sending — required, not optional
-
-Supabase's built-in email sender is a **testing-only** service capped at roughly
-**2 emails per hour, for the whole project**. Two sign-ins and everyone else is
-locked out with "too many sign-in emails went out". You need your own sender
-before the crew touches this.
-
-Pick whichever is easier for you:
-
-### Option A — Gmail (fastest, no domain needed)
-
-Good for a small crew. Google allows ~500 messages a day, far more than you'll use.
-
-1. Your Google account needs **2-Step Verification** turned on
-   ([myaccount.google.com/security](https://myaccount.google.com/security)).
-2. Create an **App Password**:
-   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-   → name it "Task Tracker" → copy the 16-character password.
-3. In Supabase → **Project Settings** → **Authentication** → **SMTP Settings** →
-   turn on **Enable Custom SMTP** and enter:
-
-   | Field | Value |
-   |---|---|
-   | Host | `smtp.gmail.com` |
-   | Port | `587` |
-   | Username | your full Gmail address |
-   | Password | the 16-character app password (no spaces) |
-   | Sender email | the same Gmail address |
-   | Sender name | your business name |
-
-### Option B — a proper email service (better deliverability)
-
-[Resend](https://resend.com), [Brevo](https://brevo.com) or SendGrid all have
-free tiers. Resend and Mailgun want you to own a domain; Brevo and SendGrid let
-you verify a single sender address instead. Create the account, get the SMTP
-host / port / username / password, and paste them into the same Supabase screen.
-
-### Then raise the limit
-
-**Authentication** → **Rate Limits** → **Rate limit for sending emails** — the
-built-in cap of 2/hour only lifts once custom SMTP is on. Set it to something
-comfortable, like 30 per hour.
-
-### Testing without sending anything
-
-While you're setting up, you can skip email entirely: **Authentication** →
-**Sign In / Providers** → **Email** → find **Test OTP** and add a mapping like
-
-```
-you@example.com:123456
-```
-
-That email will now accept `123456` as its code, and no message is sent. Handy
-for trying the app on your own phone. **Remove it before real use** — anyone who
-knows that address could sign in as them.
+If you do want password resets to work, set up SMTP under **Project Settings** →
+**Authentication** → **SMTP Settings**. A Gmail app password works
+([myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
+host `smtp.gmail.com`, port `587`), as does any provider like Resend or Brevo.
 
 ## 5. Copy your keys
 
@@ -176,9 +114,8 @@ Back in Supabase: **Authentication** → **URL Configuration**.
 
 ## 8. Create your team
 
-Open your Vercel URL and tap **Create an account**. Enter your name and email,
-type the 6-digit code from your inbox, then choose **Create a new team** and name
-your business.
+Open your Vercel URL and tap **Create an account**. Enter your name, email and a
+password, then choose **Create a new team** and name your business.
 
 You're the manager. The app shows you a **6-character crew code** — that's what
 your crew types to join. You can see it again any time under **Team**.
@@ -186,8 +123,8 @@ your crew types to join. You can see it again any time under **Team**.
 ## 9. Get your crew in
 
 Send them the app link. Each person taps **Create an account**, enters their
-name and email, types their emailed code, then chooses **I have a team code** and
-types your crew code.
+name, email and a password, then chooses **I have a team code** and types your
+crew code.
 
 That's it — they're on your team and can start logging work.
 
@@ -199,6 +136,10 @@ Two things worth knowing:
   see everyone's work and sign off on photos. Only share that one deliberately.
 - If a code gets out, **New code** issues a fresh one. People already on the
   team stay on it.
+- To promote someone, open them under **Team** and switch **Role** to Manager.
+- To remove someone, open them under **Team** → **Remove from the team**. Their
+  finished work and photos stay in your records; anything still open goes back
+  in the pool.
 
 ## 10. Get it onto their phones
 
@@ -214,6 +155,39 @@ stays signed in.
 
 **More → Recurring tasks** — add the jobs that happen every day or every week.
 They appear on the crew's Today screen automatically each morning.
+
+## 12. Working from your Square schedule (optional)
+
+If you roster people in Square, the app can hand out work based on who is
+actually clocked on.
+
+**One-time setup — say what needs doing when:**
+
+**Schedule** tab → **Time blocks** → **New time block**. Each one is a job plus
+the window it has to happen in, e.g. "Restock the front cooler, between 2:00 and
+4:00 PM". Choose whether it goes to *everyone on shift* in that window or to
+*just one person*.
+
+**Each week — import the schedule:**
+
+1. In Square, export the schedule (**.xlsx** or **.csv**, one row per shift).
+2. **Schedule** tab → **Import schedule** → pick the file.
+3. The app guesses which columns hold the employee, date and times, and shows you
+   what it read before saving anything. Fix the dropdowns if a column is wrong.
+   Rows it can't read — someone marked OFF, a blank date — are listed so you can
+   see exactly what was skipped.
+4. **Import**.
+
+**Then hand out the work:** on the Schedule tab pick the day and tap
+**Hand out tasks**. Everyone on shift gets the time blocks that overlap their
+hours, and it shows up on their phone under Today with the time on it.
+
+Tap it again after a schedule change — it only ever adds what's missing, so it
+can't double up.
+
+**Names that don't match:** if Square writes someone as "D. Fox" and your team
+has "Dee Fox", they show up as **not linked**. Tap the name, pick the person,
+and the app remembers that spelling for future imports.
 
 ---
 
@@ -239,14 +213,11 @@ and Vercel stays free for this kind of site.
 
 ## Troubleshooting
 
-**The email has a link, not a code.** Both templates need `{{ .Token }}` — see
-step 3. The *Confirm signup* template is the one people forget, so first-time
-sign-ups keep getting links.
+**"Email confirmation is still switched on."** Do step 3 — Authentication →
+Sign In / Providers → Email → turn **Confirm email** off.
 
-**"Too many sign-in emails went out" / no email arrives.** The built-in Supabase
-sender allows about 2 emails per hour for the entire project. Set up your own
-SMTP (step 4) and raise the rate limit. To keep testing right now, either wait
-an hour or add a Test OTP as described in step 4.
+**Someone forgot their password.** Password resets need SMTP (step 4). Without
+it, remove them under Team and have them sign up again.
 
 **"That team code does not match any team."** Codes are 6 characters and skip
 easily-confused letters (no O, I or L — those are zero, one and one). Read it
@@ -257,6 +228,18 @@ join again with the right code.
 
 **Screens error out right after signing in.** The database tables aren't there —
 run `supabase/schema.sql` (step 2).
+
+**Import says it can't read the dates or times.** Change the column dropdowns on
+the import screen — the preview updates as you do. If your dates are day/month,
+tick that box. Rows the app skipped are listed with the reason.
+
+**Someone on the schedule shows "not linked".** Square spells their name
+differently from their app account. Tap the name on the Schedule tab and pick
+the person; it's remembered from then on.
+
+**Handing out tasks assigned nothing.** Either nobody's shift overlaps a time
+block's window, or everyone already has those tasks. The Schedule tab shows who
+is on and how many tasks each has.
 
 **A photo won't upload.** Check **Storage** shows a private bucket named
 `task-photos`; if not, re-run the schema.

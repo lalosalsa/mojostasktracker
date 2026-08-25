@@ -60,6 +60,10 @@ const tasks = [
     assignee: { id: USER_ID, name: 'Sam Boss' }, reviewer: null, photos: [] },
 ];
 
+let signedUp = false;
+let signedUpName = '';
+const signedUpFlag = () => signedUp;
+
 const json = (route, body, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body),
     headers: { 'access-control-allow-origin': '*' } });
@@ -73,7 +77,7 @@ const context = await browser.newContext({
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
 });
 
-let otpRequested = false;
+let importedShifts = 0;
 let identity = 'manager';
 let hasTeam = true;
 let createdTeamName = '';
@@ -91,10 +95,43 @@ await context.route(`${SUPA}/**`, async (route) => {
   const method = route.request().method();
   if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' } });
 
-  if (url.includes('/auth/v1/otp')) { otpRequested = true; return json(route, {}); }
-  if (url.includes('/auth/v1/verify')) return json(route, { access_token: 'x', user: { id: USER_ID } });
+  if (url.includes('/auth/v1/signup')) {
+    const payload = JSON.parse(route.request().postData() || '{}');
+    signedUp = true;
+    signedUpName = payload?.data?.full_name || '';
+    return json(route, { access_token: 'fake', refresh_token: 'fake', token_type: 'bearer',
+      expires_in: 999999, expires_at: Math.floor(Date.now() / 1000) + 999999,
+      user: { id: USER_ID, email: 'boss@mojo.test', aud: 'authenticated', role: 'authenticated',
+              app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' } });
+  }
+  if (url.includes('/auth/v1/token')) {
+    return json(route, { access_token: 'fake', refresh_token: 'fake', token_type: 'bearer',
+      expires_in: 999999, expires_at: Math.floor(Date.now() / 1000) + 999999,
+      user: { id: USER_ID, email: 'boss@mojo.test', aud: 'authenticated', role: 'authenticated',
+              app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' } });
+  }
   if (url.includes('/auth/v1/user')) return json(route, profile);
   if (url.includes('/rest/v1/rpc/whoami')) return json(route, identityPayload());
+  if (url.includes('/rest/v1/rpc/day_schedule')) {
+    return json(route, [
+      { shift_id: 1, member_id: employee.id, person_name: 'Jose P', matched: true,
+        starts_at: '08:00:00', ends_at: '16:00:00', task_count: 2, done_count: 1 },
+      { shift_id: 2, member_id: null, person_name: 'D. Fox', matched: false,
+        starts_at: '09:00:00', ends_at: '17:00:00', task_count: 0, done_count: 0 },
+    ]);
+  }
+  if (url.includes('/rest/v1/rpc/my_shift')) {
+    return json(route, [{ starts_at: '08:00:00', ends_at: '16:00:00' }]);
+  }
+  if (url.includes('/rest/v1/rpc/upsert_shift')) { importedShifts += 1; return json(route, importedShifts); }
+  if (url.includes('/rest/v1/rpc/generate_scheduled_tasks')) return json(route, 3);
+  if (url.includes('/rest/v1/rpc/link_schedule_name')) return json(route, null);
+  if (url.includes('/rest/v1/task_windows')) {
+    return json(route, [{ id: 1, team_id: TEAM.id, title: 'Restock the cooler', description: '',
+      location: '', priority: 'normal', requires_photo: true, starts_at: '14:00:00',
+      ends_at: '16:00:00', recurrence: 'daily', weekday: null, assign_mode: 'one', active: true }]);
+  }
+  if (url.includes('/rest/v1/shifts')) return json(route, []);
   if (url.includes('/rest/v1/rpc/set_my_name')) return json(route, identityPayload());
   if (url.includes('/rest/v1/rpc/create_team')) {
     createdTeamName = JSON.parse(route.request().postData() || '{}').p_team_name || '';
@@ -179,23 +216,26 @@ check('offers create-account and log-in', await page.locator('text=Create an acc
 
 await page.click('[data-signup]');
 await page.waitForSelector('#si-name', { timeout: 5000 });
-check('sign-up asks for a name', await page.locator('#si-name').isVisible());
-
-await page.fill('#si-email', 'boss@mojo.test');
-await page.click('button[type=submit]');
-check('name is required before a code is sent', !otpRequested);
+check('sign-up asks for name, email and password',
+  await page.locator('#si-name').isVisible()
+  && await page.locator('#si-email').isVisible()
+  && await page.locator('#si-pass').isVisible());
+check('no verification-code field anywhere', (await page.locator('#si-code').count()) === 0);
 
 await page.fill('#si-name', 'Sam Boss');
+await page.fill('#si-email', 'boss@mojo.test');
+await page.fill('#si-pass', 'short');
 await page.click('button[type=submit]');
-await page.waitForSelector('#si-code', { timeout: 5000 });
-check('asks for the emailed 6-digit code', await page.locator('#si-code').isVisible());
-check('requested the code from Supabase', otpRequested);
-check('tells them where the code went', (await page.locator('.lede').innerText()).includes('boss@mojo.test'));
-await page.screenshot({ path: 'test/shots/02-signup.png' });
+check('a too-short password is refused', !signedUp);
 
-await page.click('[data-back]');
-await page.waitForSelector('#si-email', { timeout: 5000 });
-check('can go back and change the email', await page.locator('#si-email').isVisible());
+await page.fill('#si-pass', 'longenoughpw');
+await page.check('[data-show]');
+check('show-password reveals it', (await page.getAttribute('#si-pass', 'type')) === 'text');
+await page.screenshot({ path: 'test/shots/02-signup.png' });
+await page.click('button[type=submit]');
+await page.waitForFunction(() => true);
+for (let i = 0; i < 20 && !signedUpFlag(); i += 1) await page.waitForTimeout(100);
+check('sign-up posts to Supabase with the name attached', signedUp && signedUpName === 'Sam Boss');
 
 console.log('\nJoining a team');
 hasTeam = false;
@@ -263,7 +303,7 @@ check('photo proof thumbnails actually load',
   }));
 await page.screenshot({ path: 'test/shots/06-review.png', fullPage: true });
 
-await page.click('[data-tab="/tasks"]');
+await page.evaluate(() => { location.hash = '#/tasks'; });
 await page.waitForSelector('.task', { timeout: 5000 });
 check('task board renders task cards', (await page.locator('.task').count()) >= 2);
 await page.locator('.task').first().click();
@@ -288,6 +328,60 @@ await page.waitForSelector('text=Put this on your home screen', { timeout: 5000 
 check('account screen explains home-screen install', true);
 await page.screenshot({ path: 'test/shots/09-account.png', fullPage: true });
 
+console.log('\nSchedule');
+await page.click('[data-tab="/schedule"]');
+await page.waitForSelector('text=Who\'s working', { timeout: 5000 });
+check('shows who is on shift today', await page.locator('text=Jose P').first().isVisible());
+check('flags a schedule name that matches nobody',
+  await page.locator('text=not linked').isVisible());
+check('offers to hand out the day\'s tasks',
+  await page.locator('text=Hand out tasks').isVisible());
+await page.screenshot({ path: 'test/shots/13-schedule.png', fullPage: true });
+
+const generate = page.locator('button', { hasText: 'Hand out tasks' }).first();
+await generate.click();
+await page.waitForTimeout(800);
+check('handing out tasks reports what it assigned',
+  (await page.locator('#toasts').innerText()).includes('Assigned 3'));
+
+console.log('\nSchedule import');
+await page.click('[data-import]');
+await page.waitForSelector('[data-pick]', { timeout: 5000 });
+const csvPath = path.join(ROOT, 'test', 'shots', 'sample-schedule.csv');
+fs.writeFileSync(csvPath,
+  'Team Member,Date,Start Time,End Time\n' +
+  'Jose Perez,8/25/2026,8:00 AM,4:00 PM\n' +
+  '"Ruiz, Mia",8/25/2026,12:00 PM,8:00 PM\n' +
+  'Dee Fox,8/25/2026,9a,5p\n' +
+  'Pat Nolan,8/25/2026,OFF,\n');
+const importChooser = page.waitForEvent('filechooser');
+await page.click('[data-pick]');
+(await importChooser).setFiles(csvPath);
+await page.waitForSelector('#mp-name', { timeout: 5000 });
+check('auto-detects the employee/date/time columns',
+  (await page.inputValue('#mp-name')) === '0' && (await page.inputValue('#mp-date')) === '1'
+  && (await page.inputValue('#mp-start')) === '2' && (await page.inputValue('#mp-end')) === '3');
+check('previews what it read before saving anything',
+  (await page.locator('.sheet-body').innerText()).includes('3 shifts'));
+check('says which rows it skipped and why',
+  (await page.locator('.sheet-body').innerText()).includes('marked off'));
+await page.screenshot({ path: 'test/shots/14-import.png' });
+
+const importBtn = page.locator('.sheet-foot button', { hasText: 'Import 3 shifts' });
+check('import button is labelled with the count', await importBtn.isVisible());
+await importBtn.click();
+for (let i = 0; i < 40 && importedShifts < 3; i += 1) await page.waitForTimeout(100);
+check('saves every parsed shift', importedShifts === 3, `${importedShifts} sent`);
+fs.rmSync(csvPath, { force: true });
+
+console.log('\nTime blocks');
+await page.evaluate(() => { location.hash = '#/windows'; });
+await page.waitForSelector('text=Restock the cooler', { timeout: 5000 });
+check('lists the time blocks with their window and mode',
+  (await page.locator('#view').innerText()).includes('2pm – 4pm')
+  && (await page.locator('#view').innerText()).includes('one person'));
+await page.screenshot({ path: 'test/shots/15-windows.png', fullPage: true });
+
 console.log('\nCrew app');
 identity = 'employee';
 await page.evaluate(() => { location.hash = '#/today'; });
@@ -299,6 +393,8 @@ check('crew sees only three tabs (no manager tools)',
   (await page.locator('[data-tab]').count()) === 3);
 check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test(await page.locator('.hero').innerText()));
 check('shows a "log a task" button', await page.locator('.fab').isVisible());
+check('tells the crew member their shift',
+  (await page.locator('.hero').innerText()).includes("You're on 8am – 4pm"));
 await page.screenshot({ path: 'test/shots/10-today.png', fullPage: true });
 
 console.log('\nPhoto upload');

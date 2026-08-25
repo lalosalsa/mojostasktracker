@@ -24,6 +24,7 @@ export async function teamView(container) {
 
   const active = team.filter((p) => p.status === 'active');
   const paused = team.filter((p) => p.status === 'disabled');
+  const removed = team.filter((p) => p.status === 'removed');
 
   const renderPerson = (p) => {
     const s = statsById.get(p.id);
@@ -32,7 +33,8 @@ export async function teamView(container) {
         <span class="avatar">${esc(initials(p.name || p.email))}</span>
         <span class="grow">
           <span style="font-weight:650;display:block">${esc(p.name || p.email)}
-            ${p.role === 'manager' ? '<span class="chip brand" style="margin-left:6px">Manager</span>' : ''}</span>
+            ${p.role === 'manager' ? '<span class="chip brand" style="margin-left:6px">Manager</span>' : ''}
+            ${p.status === 'removed' ? '<span class="chip" style="margin-left:6px">removed</span>' : ''}</span>
           <span class="small muted">${esc(p.job_title || p.email)}</span>
           <span class="small muted" style="display:block">
             ${s ? `${s.completed}/${s.assigned} done today` : 'No tasks today'} ·
@@ -57,6 +59,12 @@ export async function teamView(container) {
     const off = el(`<div class="section">${sectionHead('Turned off', paused.length)}</div>`);
     paused.forEach((p) => off.appendChild(renderPerson(p)));
     shell.appendChild(off);
+  }
+
+  if (removed.length) {
+    const gone = el(`<div class="section">${sectionHead('No longer on the team', removed.length)}</div>`);
+    removed.forEach((p) => gone.appendChild(renderPerson(p)));
+    shell.appendChild(gone);
   }
 }
 
@@ -171,8 +179,13 @@ function openMemberSheet(person, onDone) {
       </div>
       <div class="btn-row mt">
         <button class="btn ghost" data-tasks>See their tasks</button>
-        ${!self ? `<button class="btn ghost" data-toggle>${person.status === 'active' ? 'Turn off access' : 'Turn access back on'}</button>` : ''}
+        ${!self && person.status === 'active' ? '<button class="btn ghost" data-toggle>Turn off access</button>' : ''}
+        ${!self && person.status === 'disabled' ? '<button class="btn ghost" data-toggle>Turn access back on</button>' : ''}
+        ${!self && person.status === 'removed' ? '<button class="btn ghost" data-restore>Add back to team</button>' : ''}
       </div>
+      ${!self && person.status !== 'removed'
+        ? '<button class="btn link block mt" data-remove style="color:var(--danger)">Remove from the team</button>'
+        : ''}
     </div>`);
 
   const foot = el(`<div style="display:flex;gap:10px;width:100%">
@@ -202,6 +215,33 @@ function openMemberSheet(person, onDone) {
       await data.updateMember(person.id, { status: turningOff ? 'disabled' : 'active' });
       s.close();
       toast(turningOff ? 'Access turned off' : 'Access restored', 'ok');
+      onDone?.();
+    } catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
+  });
+
+  body.querySelector('[data-remove]')?.addEventListener('click', async () => {
+    const yes = await confirmSheet({
+      title: `Remove ${person.name || person.email}?`,
+      message: 'They lose access straight away. Work they already finished — and the photos — '
+        + 'stay in your records. Anything still open goes back in the pool for someone else.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!yes) return;
+    try {
+      await data.removeMember(person.id);
+      s.close();
+      toast('Removed from the team', 'ok');
+      onDone?.();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  body.querySelector('[data-restore]')?.addEventListener('click', async (e) => {
+    busy(e.currentTarget);
+    try {
+      await data.restoreMember(person.id);
+      s.close();
+      toast('Back on the team', 'ok');
       onDone?.();
     } catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
   });

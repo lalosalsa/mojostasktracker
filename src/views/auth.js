@@ -54,23 +54,18 @@ export function setupView(root) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 /**
- * Screens: welcome → (sign up | log in) → emailed code.
- * Verifying the code hands off to main.js, which decides whether the person
- * still needs a team.
+ * Welcome → create an account (name, email, password) or log in.
+ * No emails are sent; Supabase's "Confirm email" setting must be off.
  */
 export function signInView(root, { appName = APP_NAME } = {}) {
   root.innerHTML = '';
-  let name = '';
-  let email = '';
   let mode = 'signup';
-  let cooldown = 0;
-  let timer = null;
 
   const wrap = el(`
     <div class="auth">
       <div class="brand-mark">✓</div>
       <h1 data-heading>${esc(appName)}</h1>
-      <p class="lede" data-lede">Track the work your crew finishes, with photo proof.</p>
+      <p class="lede">Track the work your crew finishes each day, with photo proof.</p>
       <div data-step></div>
       <p class="foot" data-foot></p>
     </div>`);
@@ -79,9 +74,7 @@ export function signInView(root, { appName = APP_NAME } = {}) {
   const lede = wrap.querySelector('.lede');
   const foot = wrap.querySelector('[data-foot]');
 
-  /* ---- welcome ---- */
   const welcomeStep = () => {
-    clearInterval(timer);
     step.innerHTML = '';
     heading.textContent = appName;
     lede.textContent = 'Track the work your crew finishes each day, with photo proof.';
@@ -92,19 +85,18 @@ export function signInView(root, { appName = APP_NAME } = {}) {
         <button class="btn block" data-signup>Create an account</button>
         <button class="btn ghost block mt" data-login>I already have an account</button>
       </div>`);
-    buttons.querySelector('[data-signup]').onclick = () => { mode = 'signup'; detailsStep(); };
-    buttons.querySelector('[data-login]').onclick = () => { mode = 'login'; detailsStep(); };
+    buttons.querySelector('[data-signup]').onclick = () => { mode = 'signup'; formStep(); };
+    buttons.querySelector('[data-login]').onclick = () => { mode = 'login'; formStep(); };
     step.appendChild(buttons);
   };
 
-  /* ---- name + email ---- */
-  const detailsStep = () => {
+  const formStep = () => {
     step.innerHTML = '';
     const signup = mode === 'signup';
     heading.textContent = signup ? 'Create your account' : 'Welcome back';
     lede.textContent = signup
-      ? "We'll email you a 6-digit code to confirm it's you. No password to remember."
-      : 'Enter the email you signed up with and we\'ll send you a code.';
+      ? 'Your name is what your manager sees on every task you finish.'
+      : 'Sign in with the email and password you signed up with.';
     foot.textContent = '';
 
     const form = el(`
@@ -112,141 +104,111 @@ export function signInView(root, { appName = APP_NAME } = {}) {
         ${signup ? `
         <div class="field">
           <label for="si-name">Your name</label>
-          <input class="input" id="si-name" autocomplete="name" placeholder="Jose Perez"
-                 maxlength="80" value="${esc(name)}">
+          <input class="input" id="si-name" autocomplete="name" placeholder="Jose Perez" maxlength="80">
         </div>` : ''}
         <div class="field">
           <label for="si-email">Email</label>
-          <input class="input" id="si-email" type="email" inputmode="email" autocomplete="email"
-                 autocapitalize="none" spellcheck="false" placeholder="you@company.com" value="${esc(email)}">
+          <input class="input" id="si-email" type="email" inputmode="email"
+                 autocomplete="${signup ? 'email' : 'username'}"
+                 autocapitalize="none" spellcheck="false" placeholder="you@company.com">
         </div>
-        <button class="btn block" type="submit">Send my code</button>
-        <button class="btn link block mt" type="button" data-back>← Back</button>
+        <div class="field">
+          <label for="si-pass">Password</label>
+          <input class="input" id="si-pass" type="password"
+                 autocomplete="${signup ? 'new-password' : 'current-password'}"
+                 placeholder="${signup ? 'At least 8 characters' : ''}">
+          ${signup ? '<div class="hint">At least 8 characters. Write it down somewhere safe.</div>' : ''}
+        </div>
+        <label class="switch">
+          <input type="checkbox" data-show>
+          <span>Show password</span>
+        </label>
+        <button class="btn block" type="submit">${signup ? 'Create account' : 'Sign in'}</button>
+        ${signup ? '' : '<button class="btn link block mt" type="button" data-forgot>Forgot password?</button>'}
+        <button class="btn link block" type="button" data-back>← Back</button>
       </form>`);
 
+    const pass = form.querySelector('#si-pass');
+    form.querySelector('[data-show]').onchange = (e) => {
+      pass.type = e.target.checked ? 'text' : 'password';
+    };
     form.querySelector('[data-back]').onclick = welcomeStep;
+    form.querySelector('[data-forgot]')?.addEventListener('click', () => forgotStep());
+
     form.onsubmit = async (e) => {
       e.preventDefault();
       const btn = form.querySelector('button[type=submit]');
-      email = form.querySelector('#si-email').value.trim().toLowerCase();
-      name = signup ? form.querySelector('#si-name').value.trim() : '';
+      const email = form.querySelector('#si-email').value.trim().toLowerCase();
+      const password = pass.value;
+      const name = signup ? form.querySelector('#si-name').value.trim() : '';
 
       if (signup && name.length < 2) {
         toast('Tell us your name so your manager knows who did the work', 'error');
-        form.querySelector('#si-name').focus();
-        return;
+        return form.querySelector('#si-name').focus();
       }
       if (!EMAIL_RE.test(email)) {
         toast('Enter a valid email address', 'error');
-        form.querySelector('#si-email').focus();
-        return;
+        return form.querySelector('#si-email').focus();
+      }
+      if (signup && password.length < 8) {
+        toast('Use at least 8 characters for your password', 'error');
+        return pass.focus();
+      }
+      if (!password) {
+        toast('Enter your password', 'error');
+        return pass.focus();
       }
 
       busy(btn);
       try {
-        await sendCode();
-        codeStep();
+        if (signup) await data.signUp({ name, email, password });
+        else await data.signIn({ email, password });
+        // main.js takes over from onAuthStateChange
       } catch (err) {
         toast(friendlyError(err), 'error');
         busy(btn, false);
       }
     };
+
     step.appendChild(form);
     setTimeout(() => form.querySelector(signup ? '#si-name' : '#si-email').focus(), 120);
   };
 
-  const sendCode = async () => {
-    const { error } = await sb().auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: mode === 'signup',
-        data: name ? { full_name: name } : undefined,
-      },
-    });
-    if (error) {
-      // Supabase says "Signups not allowed" when logging in with an unknown email
-      if (/not allowed|not found|signup/i.test(error.message) && mode === 'login') {
-        throw new Error("We don't have an account for that email. Create one instead.");
-      }
-      throw error;
-    }
-  };
-
-  /* ---- 6-digit code ---- */
-  const codeStep = () => {
+  const forgotStep = () => {
     step.innerHTML = '';
-    heading.textContent = 'Check your email';
-    lede.innerHTML = `We sent a 6-digit code to <strong>${esc(email)}</strong>.`;
-    foot.textContent = "Can't find it? Check spam — it arrives within a minute.";
-    cooldown = 45;
+    heading.textContent = 'Reset your password';
+    lede.textContent = "We'll email you a reset link.";
+    foot.textContent = 'This is the one thing that needs email set up in Supabase. '
+      + "If nothing arrives, ask your manager to remove you and sign up again.";
 
     const form = el(`
       <form novalidate>
         <div class="field">
-          <label for="si-code">6-digit code</label>
-          <input class="input code-input" id="si-code" inputmode="numeric" autocomplete="one-time-code"
-                 maxlength="6" pattern="[0-9]*" placeholder="······">
+          <label for="fp-email">Email</label>
+          <input class="input" id="fp-email" type="email" inputmode="email"
+                 autocapitalize="none" spellcheck="false" placeholder="you@company.com">
         </div>
-        <button class="btn block" type="submit">Verify and continue</button>
-        <div class="btn-row mt">
-          <button class="btn link" type="button" data-back>← Change email</button>
-          <button class="btn link" type="button" data-resend disabled>Resend in 45s</button>
-        </div>
+        <button class="btn block" type="submit">Send reset link</button>
+        <button class="btn link block mt" type="button" data-back>← Back</button>
       </form>`);
-
-    const input = form.querySelector('#si-code');
-    const resend = form.querySelector('[data-resend]');
-
-    clearInterval(timer);
-    timer = setInterval(() => {
-      cooldown -= 1;
-      if (cooldown <= 0) {
-        clearInterval(timer);
-        resend.disabled = false;
-        resend.textContent = 'Resend code';
-      } else {
-        resend.textContent = `Resend in ${cooldown}s`;
-      }
-    }, 1000);
-
-    const submit = async () => {
-      const token = input.value.replace(/\D/g, '');
-      if (token.length !== 6) return;
+    form.querySelector('[data-back]').onclick = formStep;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
       const btn = form.querySelector('button[type=submit]');
+      const email = form.querySelector('#fp-email').value.trim().toLowerCase();
+      if (!EMAIL_RE.test(email)) return toast('Enter a valid email address', 'error');
       busy(btn);
       try {
-        const { error } = await sb().auth.verifyOtp({ email, token, type: 'email' });
-        if (error) throw error;
-        clearInterval(timer);
-        if (name) await data.setMyName(name).catch(() => {});
-        // main.js picks it up from here via onAuthStateChange
+        await data.sendPasswordReset(email);
+        toast('Check your email for the reset link', 'ok');
+        formStep();
       } catch (err) {
         toast(friendlyError(err), 'error');
         busy(btn, false);
-        input.select();
       }
     };
-
-    input.oninput = () => {
-      input.value = input.value.replace(/\D/g, '').slice(0, 6);
-      if (input.value.length === 6) submit();
-    };
-    form.onsubmit = (e) => { e.preventDefault(); submit(); };
-    form.querySelector('[data-back]').onclick = () => { clearInterval(timer); detailsStep(); };
-    resend.onclick = async () => {
-      resend.disabled = true;
-      try {
-        await sendCode();
-        toast('New code sent', 'ok');
-        codeStep();
-      } catch (err) {
-        toast(friendlyError(err), 'error');
-        resend.disabled = false;
-      }
-    };
-
     step.appendChild(form);
-    setTimeout(() => input.focus(), 120);
+    setTimeout(() => form.querySelector('#fp-email').focus(), 120);
   };
 
   welcomeStep();
