@@ -43,6 +43,21 @@ const profile = {
 };
 const employee = { ...profile, id: '22222222-2222-2222-2222-222222222222',
   email: 'jose@mojo.test', name: 'Jose P', role: 'employee' };
+const BLOCKS = [
+  { id: 1, team_id: TEAM.id, name: 'Morning Prep', starts_at: '07:00:00', ends_at: '11:00:00',
+    position: 0, active: true, items: [
+      { id: 11, title: 'Unlock and light up', description: '', location: '', priority: 'normal',
+        requires_photo: true, assigned_to: null, position: 0, active: true },
+      { id: 12, title: 'Stock the front cooler', description: '', location: '', priority: 'normal',
+        requires_photo: true, assigned_to: null, weekdays: [1, 2, 3, 4, 5], position: 1, active: true },
+    ] },
+  { id: 2, team_id: TEAM.id, name: 'Closing', starts_at: null, ends_at: null,
+    position: 1, active: true, items: [
+      { id: 21, title: 'Mop the floor', description: '', location: '', priority: 'normal',
+        requires_photo: true, assigned_to: null, position: 0, active: true },
+    ] },
+];
+
 const tasks = [
   { id: 1, title: 'Sweep the shop floor', description: 'Front to back', location: 'Bay 2',
     status: 'submitted', priority: 'high', requires_photo: true, work_date: today, due_date: today,
@@ -50,14 +65,19 @@ const tasks = [
     team_id: TEAM.id,
     created_at: `${today}T14:00:00Z`, started_at: `${today}T15:00:00Z`, completed_at: `${today}T16:00:00Z`,
     reviewed_at: null, assigned_to: employee.id, created_by: USER_ID, reviewed_by: null,
+    completed_by: employee.id, block_id: 1, block_item_id: 11,
     assignee: { id: employee.id, name: 'Jose P' }, reviewer: null,
+    finisher: { id: employee.id, name: 'Jose P' },
+    block: { id: 1, name: 'Morning Prep', starts_at: '07:00:00', ends_at: '11:00:00', position: 0 },
     photos: [{ id: 7, storage_path: `${employee.id}/1/a.jpg`, thumb_path: null, caption: '',
                latitude: null, longitude: null, created_at: `${today}T16:00:00Z`, member_id: employee.id }] },
   { id: 2, title: 'Restock the van', description: '', location: '', status: 'open', priority: 'normal',
     requires_photo: true, work_date: today, due_date: today, notes: '', review_note: '', minutes_spent: null,
     template_id: null, team_id: TEAM.id, created_at: `${today}T14:00:00Z`, started_at: null, completed_at: null,
-    reviewed_at: null, assigned_to: USER_ID, created_by: USER_ID, reviewed_by: null,
-    assignee: { id: USER_ID, name: 'Sam Boss' }, reviewer: null, photos: [] },
+    reviewed_at: null, assigned_to: null, created_by: USER_ID, reviewed_by: null,
+    completed_by: null, block_id: 2, block_item_id: 21,
+    assignee: null, reviewer: null, finisher: null,
+    block: { id: 2, name: 'Closing', starts_at: null, ends_at: null, position: 1 }, photos: [] },
 ];
 
 let signedUp = false;
@@ -77,7 +97,7 @@ const context = await browser.newContext({
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
 });
 
-let importedShifts = 0;
+let addedItem = null;
 let identity = 'manager';
 let hasTeam = true;
 let createdTeamName = '';
@@ -112,26 +132,14 @@ await context.route(`${SUPA}/**`, async (route) => {
   }
   if (url.includes('/auth/v1/user')) return json(route, profile);
   if (url.includes('/rest/v1/rpc/whoami')) return json(route, identityPayload());
-  if (url.includes('/rest/v1/rpc/day_schedule')) {
-    return json(route, [
-      { shift_id: 1, member_id: employee.id, person_name: 'Jose P', matched: true,
-        starts_at: '08:00:00', ends_at: '16:00:00', task_count: 2, done_count: 1 },
-      { shift_id: 2, member_id: null, person_name: 'D. Fox', matched: false,
-        starts_at: '09:00:00', ends_at: '17:00:00', task_count: 0, done_count: 0 },
-    ]);
+  if (url.includes('/rest/v1/blocks')) return json(route, BLOCKS);
+  if (url.includes('/rest/v1/block_items')) {
+    if (method === 'POST') {
+      addedItem = JSON.parse(route.request().postData() || '{}');
+      return json(route, { id: 99, ...addedItem });
+    }
+    return json(route, BLOCKS.flatMap((b) => b.items));
   }
-  if (url.includes('/rest/v1/rpc/my_shift')) {
-    return json(route, [{ starts_at: '08:00:00', ends_at: '16:00:00' }]);
-  }
-  if (url.includes('/rest/v1/rpc/upsert_shift')) { importedShifts += 1; return json(route, importedShifts); }
-  if (url.includes('/rest/v1/rpc/generate_scheduled_tasks')) return json(route, 3);
-  if (url.includes('/rest/v1/rpc/link_schedule_name')) return json(route, null);
-  if (url.includes('/rest/v1/task_windows')) {
-    return json(route, [{ id: 1, team_id: TEAM.id, title: 'Restock the cooler', description: '',
-      location: '', priority: 'normal', requires_photo: true, starts_at: '14:00:00',
-      ends_at: '16:00:00', recurrence: 'daily', weekday: null, assign_mode: 'one', active: true }]);
-  }
-  if (url.includes('/rest/v1/shifts')) return json(route, []);
   if (url.includes('/rest/v1/rpc/set_my_name')) return json(route, identityPayload());
   if (url.includes('/rest/v1/rpc/create_team')) {
     createdTeamName = JSON.parse(route.request().postData() || '{}').p_team_name || '';
@@ -328,59 +336,47 @@ await page.waitForSelector('text=Put this on your home screen', { timeout: 5000 
 check('account screen explains home-screen install', true);
 await page.screenshot({ path: 'test/shots/09-account.png', fullPage: true });
 
-console.log('\nSchedule');
-await page.click('[data-tab="/schedule"]');
-await page.waitForSelector('text=Who\'s working', { timeout: 5000 });
-check('shows who is on shift today', await page.locator('text=Jose P').first().isVisible());
-check('flags a schedule name that matches nobody',
-  await page.locator('text=not linked').isVisible());
-check('offers to hand out the day\'s tasks',
-  await page.locator('text=Hand out tasks').isVisible());
-await page.screenshot({ path: 'test/shots/13-schedule.png', fullPage: true });
+console.log('\nBlocks');
+await page.click('[data-tab="/blocks"]');
+await page.waitForSelector('text=Morning Prep', { timeout: 5000 });
+const blocksText = await page.locator('#view').innerText();
+check('lists the named blocks of the day',
+  blocksText.includes('Morning Prep') && blocksText.includes('Closing'));
+check('shows each block\'s time range', blocksText.includes('7am – 11am'));
+check('shows the tasks inside a block', blocksText.includes('Stock the front cooler'));
+check('a weekday-limited task shows its days', blocksText.includes('Mon–Fri'));
+check('a block with no times reads "any time"', blocksText.includes('any time'));
+await page.screenshot({ path: 'test/shots/13-blocks.png', fullPage: true });
 
-const generate = page.locator('button', { hasText: 'Hand out tasks' }).first();
-await generate.click();
-await page.waitForTimeout(800);
-check('handing out tasks reports what it assigned',
-  (await page.locator('#toasts').innerText()).includes('Assigned 3'));
+await page.locator('button', { hasText: 'Add a task to Morning Prep' }).first().click();
+await page.waitForSelector('#i-title', { timeout: 5000 });
+check('adding a task says which block it lands in',
+  (await page.locator('.sheet-body').innerText()).includes('In Morning Prep'));
+check('a task can be left open to anyone',
+  (await page.locator('#i-who option').first().innerText()) === 'Anyone on the crew');
+check('every weekday is on by default', (await page.locator('.daypick .day.on').count()) === 7);
 
-console.log('\nSchedule import');
-await page.click('[data-import]');
-await page.waitForSelector('[data-pick]', { timeout: 5000 });
-const csvPath = path.join(ROOT, 'test', 'shots', 'sample-schedule.csv');
-fs.writeFileSync(csvPath,
-  'Team Member,Date,Start Time,End Time\n' +
-  'Jose Perez,8/25/2026,8:00 AM,4:00 PM\n' +
-  '"Ruiz, Mia",8/25/2026,12:00 PM,8:00 PM\n' +
-  'Dee Fox,8/25/2026,9a,5p\n' +
-  'Pat Nolan,8/25/2026,OFF,\n');
-const importChooser = page.waitForEvent('filechooser');
-await page.click('[data-pick]');
-(await importChooser).setFiles(csvPath);
-await page.waitForSelector('#mp-name', { timeout: 5000 });
-check('auto-detects the employee/date/time columns',
-  (await page.inputValue('#mp-name')) === '0' && (await page.inputValue('#mp-date')) === '1'
-  && (await page.inputValue('#mp-start')) === '2' && (await page.inputValue('#mp-end')) === '3');
-check('previews what it read before saving anything',
-  (await page.locator('.sheet-body').innerText()).includes('3 shifts'));
-check('says which rows it skipped and why',
-  (await page.locator('.sheet-body').innerText()).includes('marked off'));
-await page.screenshot({ path: 'test/shots/14-import.png' });
+// turn it into a Mon/Wed/Fri job
+for (const day of [0, 2, 4, 6]) await page.locator(`.daypick .day[data-day="${day}"]`).click();
+check('days can be toggled independently', (await page.locator('.daypick .day.on').count()) === 3);
+check('it says in words which days it runs',
+  (await page.locator('[data-dayhint]').innerText()).includes('Mon, Wed, Fri'));
+await page.fill('#i-title', 'Wipe the counters');
+await page.screenshot({ path: 'test/shots/14-add-task.png' });
+await page.locator('.sheet-foot button', { hasText: 'Add task' }).click();
+for (let i = 0; i < 40 && !addedItem; i += 1) await page.waitForTimeout(100);
+check('the new task is saved into that block', addedItem?.title === 'Wipe the counters');
+check('and it goes to the whole crew, not one person', addedItem?.assigned_to === null);
+check('the chosen weekdays are saved',
+  JSON.stringify(addedItem?.weekdays) === '[1,3,5]', JSON.stringify(addedItem?.weekdays));
 
-const importBtn = page.locator('.sheet-foot button', { hasText: 'Import 3 shifts' });
-check('import button is labelled with the count', await importBtn.isVisible());
-await importBtn.click();
-for (let i = 0; i < 40 && importedShifts < 3; i += 1) await page.waitForTimeout(100);
-check('saves every parsed shift', importedShifts === 3, `${importedShifts} sent`);
-fs.rmSync(csvPath, { force: true });
-
-console.log('\nTime blocks');
-await page.evaluate(() => { location.hash = '#/windows'; });
-await page.waitForSelector('text=Restock the cooler', { timeout: 5000 });
-check('lists the time blocks with their window and mode',
-  (await page.locator('#view').innerText()).includes('2pm – 4pm')
-  && (await page.locator('#view').innerText()).includes('one person'));
-await page.screenshot({ path: 'test/shots/15-windows.png', fullPage: true });
+await page.click('[data-tab="/blocks"]');
+await page.waitForSelector('text=New block', { timeout: 5000 });
+await page.locator('button', { hasText: 'New block' }).first().click();
+await page.waitForSelector('#b-name', { timeout: 5000 });
+check('a new block only needs a name',
+  (await page.locator('.sheet-body').innerText()).includes("isn't tied to a clock"));
+await page.click('.sheet-head [data-close]');
 
 console.log('\nCrew app');
 identity = 'employee';
@@ -393,8 +389,11 @@ check('crew sees only three tabs (no manager tools)',
   (await page.locator('[data-tab]').count()) === 3);
 check('greeting names the person', /Good (morning|afternoon|evening), Jose/.test(await page.locator('.hero').innerText()));
 check('shows a "log a task" button', await page.locator('.fab').isVisible());
-check('tells the crew member their shift',
-  (await page.locator('.hero').innerText()).includes("You're on 8am – 4pm"));
+const todayText = await page.locator('#view').innerText();
+check('the list is grouped under the named blocks',
+  todayText.includes('Morning Prep') && todayText.includes('Closing'));
+check('a block heading carries its time range', todayText.includes('7am – 11am'));
+check('finished work shows who did it', todayText.includes('✓ Jose P'));
 await page.screenshot({ path: 'test/shots/10-today.png', fullPage: true });
 
 console.log('\nPhoto upload');

@@ -83,10 +83,11 @@ update public.tasks set status = 'verified', review_note = 'Looks good'
 select status, review_note, reviewed_by is not null as has_reviewer from public.tasks
  where title = 'Sweep the shop floor';
 
-\echo '--- 13. recurring checklist rolls out once per day, for this team only'
-insert into public.task_templates (team_id, title, recurrence, assigned_to, created_by)
-values (public.my_team(), 'Opening checklist', 'daily',
-        '22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111');
+\echo '--- 13. the daily list rolls out once, for this team only'
+insert into public.blocks (team_id, name, position, created_by)
+values (public.my_team(), 'Opening', 0, public.me());
+insert into public.block_items (block_id, team_id, title, created_by)
+select id, team_id, 'Opening checklist', public.me() from public.blocks where name = 'Opening';
 select public.ensure_todays_tasks(current_date) as first_call;
 select public.ensure_todays_tasks(current_date) as second_call;
 set request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';

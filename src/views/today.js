@@ -3,8 +3,7 @@
 import { el, esc, sheet, toast, busy, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { state } from '../store.js';
-import { taskCard, progressRing, statTile, emptyState, skeletonList, sectionHead } from './components.js';
-import { fmtClock } from './schedule.js';
+import { taskCard, progressRing, statTile, emptyState, skeletonList, sectionHead, blockHeading } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 import { pickPhotos, uploadFiles } from '../photos.js';
 
@@ -21,7 +20,6 @@ export async function todayView(container) {
   const today = data.todayStr();
   await data.ensureTodaysTasks(today);
   data.touchLastSeen();
-  const shift = await data.myShift(today).catch(() => null);
 
   let tasks;
   try {
@@ -33,13 +31,10 @@ export async function todayView(container) {
   }
 
   const refresh = () => todayView(container);
-  const mine = tasks.filter((t) => t.assigned_to === state.me.id);
-  const upForGrabs = tasks.filter((t) => !t.assigned_to);
-  const doneCount = mine.filter((t) => t.isDone).length;
-  const todo = mine.filter((t) => ['open', 'in_progress', 'rejected'].includes(t.status));
-  const waiting = mine.filter((t) => t.status === 'submitted');
-  const verified = mine.filter((t) => t.status === 'verified');
-  const photos = mine.reduce((n, t) => n + (t.photos?.length || 0), 0);
+  const doneCount = tasks.filter((t) => t.isDone).length;
+  const todo = tasks.filter((t) => ['open', 'in_progress', 'rejected'].includes(t.status));
+  const mineDone = tasks.filter((t) => t.completed_by === state.me.id);
+  const photos = tasks.reduce((n, t) => n + (t.photos?.length || 0), 0);
 
   const firstName = (state.me.name || '').split(' ')[0] || 'there';
   const hour = new Date().getHours();
@@ -50,18 +45,18 @@ export async function todayView(container) {
     <div class="hero">
       <div class="hero-text">
         <h2>${greeting}, ${esc(firstName)}</h2>
-        <p>${doneCount} of ${mine.length || 0} task${mine.length === 1 ? '' : 's'} done · ${esc(fmtDate(today))}</p>
-        ${shift ? `<p class="small" style="color:var(--brand);font-weight:650;margin-top:4px">🗓 You're on ${esc(fmtClock(shift.starts_at))} – ${esc(fmtClock(shift.ends_at))}</p>` : ''}
+        <p>${doneCount} of ${tasks.length || 0} done today · ${esc(fmtDate(today))}</p>
+
       </div>
     </div>`);
-  hero.appendChild(progressRing(doneCount, mine.length));
+  hero.appendChild(progressRing(doneCount, tasks.length));
   shell.appendChild(hero);
 
   shell.appendChild(el(`
     <div class="stats mt">
-      ${statTile(todo.length, 'To do', todo.length ? 'brand' : '')}
-      ${statTile(waiting.length, 'In review', waiting.length ? 'warn' : '')}
-      ${statTile(verified.length, 'Verified', 'ok')}
+      ${statTile(todo.length, 'Left to do', todo.length ? 'brand' : '')}
+      ${statTile(doneCount, 'Done', doneCount ? 'ok' : '')}
+      ${statTile(mineDone.length, 'By you', 'brand')}
       ${statTile(photos, 'Photos')}
     </div>`));
 
@@ -75,21 +70,18 @@ export async function todayView(container) {
       </div>`));
   }
 
-  const addSection = (title, list, opts = {}) => {
-    if (!list.length) return;
-    const sec = el(`<div class="section">${sectionHead(title, list.length)}</div>`);
-    for (const task of list) sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: refresh }), opts));
+  for (const group of data.groupByBlock(tasks)) {
+    const sec = el(`<div class="section">${blockHeading(group)}</div>`);
+    for (const task of group.tasks) {
+      sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: refresh }), { showAssignee: true }));
+    }
     shell.appendChild(sec);
-  };
-
-  addSection('To do', todo);
-  addSection('Waiting on your manager', waiting);
-  addSection('Up for grabs', upForGrabs);
-  addSection('Signed off', verified);
+  }
 
   if (!tasks.length) {
     shell.appendChild(
-      emptyState('🎉', 'Nothing assigned yet', 'When your manager adds tasks they show up here. You can also log work you finished with the button below.')
+      emptyState('🎉', 'Nothing on the list yet',
+        "When your manager sets up the day's blocks they show up here. You can also log work you finished with the button below.")
     );
   }
 }

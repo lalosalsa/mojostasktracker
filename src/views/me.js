@@ -88,10 +88,8 @@ export async function meView(container) {
       <div class="card mt">
         <h2 style="font-size:15px">Manager tools</h2>
         <div class="btn-row mt">
-          <button class="btn ghost" data-go="/schedule">🗓 Schedule</button>
-          <button class="btn ghost" data-go="/windows">⏱ Time blocks</button>
+          <button class="btn ghost" data-go="/blocks">🧱 The day's blocks</button>
           <button class="btn ghost" data-go="/tasks">📋 All tasks</button>
-          <button class="btn ghost" data-go="/recurring">🔁 Recurring tasks</button>
           <button class="btn ghost" data-go="/reports">📊 Reports &amp; export</button>
         </div>
       </div>`);

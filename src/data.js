@@ -22,12 +22,14 @@ function unwrap({ data, error }) {
 
 const TASK_FIELDS = `
   id, team_id, title, description, location, status, priority, requires_photo,
-  work_date, due_date, notes, review_note, minutes_spent, template_id,
-  window_id, window_start, window_end,
+  work_date, due_date, notes, review_note, minutes_spent,
+  block_id, block_item_id, completed_by,
   created_at, started_at, completed_at, reviewed_at,
   assigned_to, created_by, reviewed_by,
   assignee:members!tasks_assigned_to_fkey (id, name),
   reviewer:members!tasks_reviewed_by_fkey (id, name),
+  finisher:members!tasks_completed_by_fkey (id, name),
+  block:blocks (id, name, starts_at, ends_at, position),
   photos:task_photos (id, storage_path, thumb_path, caption, latitude, longitude, created_at, member_id)
 `;
 
@@ -150,15 +152,34 @@ function decorate(row) {
 }
 
 export function sortTasks(tasks) {
-  // Time-boxed work leads, in clock order — that's the order the day happens in.
-  const when = (t) => t.window_start || '99:99';
   return [...tasks].sort(
     (a, b) =>
       (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) ||
-      when(a).localeCompare(when(b)) ||
       (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
-      b.id - a.id
+      a.id - b.id
   );
+}
+
+/** Groups a day's tasks under their block, in the order the day runs. */
+export function groupByBlock(tasks) {
+  const groups = new Map();
+  for (const task of tasks) {
+    const key = task.block?.id ?? 'none';
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        name: task.block?.name || 'Anything else',
+        startsAt: task.block?.starts_at || null,
+        endsAt: task.block?.ends_at || null,
+        position: task.block?.position ?? 999,
+        tasks: [],
+      });
+    }
+    groups.get(key).tasks.push(task);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.position - b.position || String(a.name).localeCompare(String(b.name)))
+    .map((g) => ({ ...g, tasks: g.tasks.sort((a, b) => a.id - b.id) }));
 }
 
 export async function createTask(fields) {
@@ -305,101 +326,70 @@ export const removeMember = (id) => sb().rpc('remove_member', { p_member_id: id 
 
 export const restoreMember = (id) => sb().rpc('restore_member', { p_member_id: id }).then(unwrap);
 
-/* ----------------------------------------------------------- schedules */
+/* -------------------------------------------------------- blocks & items */
 
-export const daySchedule = async (date = todayStr()) =>
-  unwrap(await sb().rpc('day_schedule', { p_date: date })) || [];
+/** The named parts of the day, each with its standing list of jobs. */
+export const listBlocks = async () =>
+  unwrap(
+    await sb().from('blocks')
+      .select('*, items:block_items (id, title, description, location, priority, requires_photo, assigned_to, weekdays, position, active)')
+      .order('position')
+  ) || [];
 
-export const myShift = async (date = todayStr()) =>
-  (unwrap(await sb().rpc('my_shift', { p_date: date })) || [])[0] || null;
-
-export const generateScheduledTasks = (date = todayStr()) =>
-  sb().rpc('generate_scheduled_tasks', { p_date: date }).then(({ data }) => data || 0, () => 0);
-
-export const linkScheduleName = (memberId, scheduleName) =>
-  sb().rpc('link_schedule_name', { p_member_id: memberId, p_schedule_name: scheduleName }).then(unwrap);
-
-/** Saves imported shifts one at a time so a single bad row can't lose the rest. */
-export async function importShifts(shifts, onProgress) {
-  let saved = 0;
-  const failures = [];
-  for (let i = 0; i < shifts.length; i += 1) {
-    const shift = shifts[i];
-    try {
-      unwrap(await sb().rpc('upsert_shift', {
-        p_person_name: shift.person,
-        p_work_date: shift.date,
-        p_starts_at: shift.start,
-        p_ends_at: shift.end,
-      }));
-      saved += 1;
-    } catch (err) {
-      failures.push({ shift, message: err.message });
-    }
-    onProgress?.(i + 1, shifts.length);
-  }
-  return { saved, failures };
+export async function createBlock(fields, teamId) {
+  const { data: { user } } = await sb().auth.getUser();
+  const existing = await listBlocks();
+  return unwrap(await sb().from('blocks').insert({
+    team_id: teamId,
+    name: fields.name,
+    starts_at: fields.startsAt || null,
+    ends_at: fields.endsAt || null,
+    position: existing.length,
+    created_by: user.id,
+  }).select().single());
 }
 
-export const deleteShiftsForDate = (date) =>
-  sb().from('shifts').delete().eq('work_date', date).then(unwrap);
+export const updateBlock = (id, patch) =>
+  sb().from('blocks').update(patch).eq('id', id).select().single().then(unwrap);
 
-/* ------------------------------------------------------- time windows */
+export const deleteBlock = (id) => sb().from('blocks').delete().eq('id', id).then(unwrap);
 
-export const listWindows = async () =>
-  unwrap(await sb().from('task_windows').select('*').order('starts_at')) || [];
+/** Moves a block earlier or later in the day. */
+export async function moveBlock(blocks, id, direction) {
+  const ordered = [...blocks].sort((a, b) => a.position - b.position);
+  const from = ordered.findIndex((b) => b.id === id);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= ordered.length) return;
+  [ordered[from], ordered[to]] = [ordered[to], ordered[from]];
+  for (let i = 0; i < ordered.length; i += 1) {
+    if (ordered[i].position !== i) {
+      await sb().from('blocks').update({ position: i }).eq('id', ordered[i].id);
+    }
+  }
+}
 
-export async function createWindow(fields, teamId) {
-  return unwrap(await sb().from('task_windows').insert({
+export async function addBlockItem(blockId, teamId, fields) {
+  const { data: { user } } = await sb().auth.getUser();
+  const siblings = unwrap(await sb().from('block_items').select('id').eq('block_id', blockId)) || [];
+  return unwrap(await sb().from('block_items').insert({
+    block_id: blockId,
     team_id: teamId,
     title: fields.title,
     description: fields.description || '',
     location: fields.location || '',
     priority: fields.priority || 'normal',
     requires_photo: fields.requiresPhoto !== false,
-    starts_at: fields.startsAt,
-    ends_at: fields.endsAt,
-    recurrence: fields.recurrence || 'daily',
-    weekday: fields.recurrence === 'weekly' ? Number(fields.weekday ?? 1) : null,
-    assign_mode: fields.assignMode || 'everyone',
+    assigned_to: fields.assignedTo || null,
+    weekdays: fields.weekdays?.length && fields.weekdays.length < 7 ? fields.weekdays : null,
+    position: siblings.length,
+    created_by: user.id,
   }).select().single());
 }
 
-export const updateWindow = (id, patch) =>
-  sb().from('task_windows').update(patch).eq('id', id).select().single().then(unwrap);
+export const updateBlockItem = (id, patch) =>
+  sb().from('block_items').update(patch).eq('id', id).select().single().then(unwrap);
 
-export const deleteWindow = (id) => sb().from('task_windows').delete().eq('id', id).then(unwrap);
-
-/* ---------------------------------------------------------------- templates */
-export const listTemplates = async () =>
-  unwrap(
-    await sb().from('task_templates')
-      .select('*, assignee:members!task_templates_assigned_to_fkey (id, name)')
-      .order('active', { ascending: false }).order('title')
-  ) || [];
-
-export async function createTemplate(fields, teamId) {
-  const { data: { user } } = await sb().auth.getUser();
-  return unwrap(
-    await sb().from('task_templates').insert({
-      team_id: teamId,
-      title: fields.title,
-      description: fields.description || '',
-      location: fields.location || '',
-      priority: fields.priority || 'normal',
-      requires_photo: fields.requiresPhoto !== false,
-      assigned_to: fields.assignedTo || null,
-      recurrence: fields.recurrence || 'daily',
-      weekday: fields.recurrence === 'weekly' ? Number(fields.weekday ?? 1) : null,
-      created_by: user.id,
-    }).select().single()
-  );
-}
-
-export const updateTemplate = (id, patch) =>
-  sb().from('task_templates').update(patch).eq('id', id).select().single().then(unwrap);
-
-export const deleteTemplate = (id) => sb().from('task_templates').delete().eq('id', id).then(unwrap);
+export const deleteBlockItem = (id) => sb().from('block_items').delete().eq('id', id).then(unwrap);
 
 /* ---------------------------------------------------------------- dashboard */
 export const employeeDayStats = async (date = todayStr()) =>

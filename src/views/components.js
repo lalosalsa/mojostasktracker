@@ -5,6 +5,21 @@ import { hydrateThumbs } from '../photos.js';
 
 const CHECK = { verified: 'done', submitted: 'pending', in_progress: 'progress' };
 
+/** Heading for one block of the day, with its optional clock range. */
+export function blockHeading(group) {
+  const when = group.startsAt && group.endsAt
+    ? `${clock(group.startsAt)} – ${clock(group.endsAt)}`
+    : group.startsAt ? `from ${clock(group.startsAt)}`
+      : group.endsAt ? `until ${clock(group.endsAt)}` : '';
+  const done = group.tasks.filter((t) => t.isDone).length;
+  return `<div class="section-head">
+    <h2>${esc(group.name)}</h2>
+    ${when ? `<span class="count">${esc(when)}</span>` : ''}
+    <span class="spacer"></span>
+    <span class="chip ${done === group.tasks.length ? 'ok' : ''}">${done}/${group.tasks.length}</span>
+  </div>`;
+}
+
 const clock = (t) => {
   if (!t) return '';
   const [h, m] = String(t).split(':').map(Number);
@@ -29,11 +44,11 @@ export function taskCard(task, onOpen, { showAssignee = false } = {}) {
         <span class="meta">
           <span class="chip ${STATUS_CHIP[task.status] || ''}">${esc(STATUS_LABELS[task.status])}</span>
           ${task.priority !== 'normal' ? `<span class="chip ${PRIORITY_CHIP[task.priority]}">${esc(task.priority)}</span>` : ''}
-          ${task.window_start ? `<span class="chip brand">⏱ ${esc(clock(task.window_start))}–${esc(clock(task.window_end))}</span>` : ''}
           ${task.location ? `<span class="chip">📍 ${esc(task.location)}</span>` : ''}
           ${task.requires_photo && !photos.length ? '<span class="chip info">📷 needs photo</span>' : ''}
           ${photos.length ? `<span class="chip">📷 ${photos.length}</span>` : ''}
-          ${showAssignee ? `<span class="chip">${esc(task.assignee?.name || 'Unassigned')}</span>` : ''}
+          ${task.finisher ? `<span class="chip ok">✓ ${esc(task.finisher.name)}</span>`
+            : showAssignee ? `<span class="chip">${esc(task.assignee?.name || 'Anyone')}</span>` : ''}
         </span>
         ${photos.length ? `<span class="thumbs">${thumbs}${more}</span>` : ''}
       </span>

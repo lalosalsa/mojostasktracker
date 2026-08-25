@@ -29,6 +29,7 @@ export function openTaskSheet(task, { onChange } = {}) {
         ? `<span class="chip ${PRIORITY_CHIP[task.priority]}">${esc(task.priority)}</span>` : '',
       task.location ? `<span class="chip">📍 ${esc(task.location)}</span>` : '',
       `<span class="chip">${esc(fmtDate(task.work_date))}</span>`,
+      task.block ? `<span class="chip brand">🧱 ${esc(task.block.name)}</span>` : '',
       task.requires_photo ? '<span class="chip info">📷 photo required</span>' : '',
     ].filter(Boolean).join('');
 
@@ -37,7 +38,10 @@ export function openTaskSheet(task, { onChange } = {}) {
         <div class="meta" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${meta}</div>
         ${task.description ? `<p class="mt small" style="color:var(--ink-2);line-height:1.55;white-space:pre-wrap">${esc(task.description)}</p>` : ''}
         <p class="small muted mt">
-          ${task.assignee ? `Assigned to ${esc(task.assignee.name || task.assignee.email)}` : 'Unassigned — anyone can pick this up'}
+          ${task.finisher
+            ? `<strong style="color:var(--ok)">✓ Done by ${esc(task.finisher.name)}</strong>`
+            : task.assignee ? `For ${esc(task.assignee.name || task.assignee.email)}`
+              : 'Open to anyone on the crew'}
         </p>
       </div>`));
 
@@ -100,7 +104,7 @@ export function openTaskSheet(task, { onChange } = {}) {
     const stamps = [
       ['Created', task.created_at],
       ['Started', task.started_at],
-      ['Marked done', task.completed_at],
+      [task.finisher ? `Marked done by ${task.finisher.name}` : 'Marked done', task.completed_at],
       ['Reviewed', task.reviewed_at],
     ].filter(([, v]) => v);
     body.appendChild(el(`

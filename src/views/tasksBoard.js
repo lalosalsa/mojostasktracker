@@ -3,7 +3,7 @@
 import { el, esc, toast, busy, sheet, fmtDate } from '../ui.js';
 import * as data from '../data.js';
 import { navigate } from '../router.js';
-import { taskCard, emptyState, skeletonList, sectionHead, statTile } from './components.js';
+import { taskCard, emptyState, skeletonList, sectionHead, statTile, blockHeading } from './components.js';
 import { openTaskSheet } from './taskSheet.js';
 
 export async function taskBoardView(container, params = {}) {
@@ -88,17 +88,10 @@ export async function taskBoardView(container, params = {}) {
     return;
   }
 
-  const byPerson = new Map();
-  for (const t of data.sortTasks(tasks)) {
-    const key = t.assignee?.name || t.assignee?.email || 'Unassigned';
-    if (!byPerson.has(key)) byPerson.set(key, []);
-    byPerson.get(key).push(t);
-  }
-  for (const [person, list] of byPerson) {
-    const sec = el(`<div class="section">${sectionHead(person, list.length,
-      `<span class="chip ${list.every((t) => t.isDone) ? 'ok' : ''}">${list.filter((t) => t.isDone).length}/${list.length}</span>`)}</div>`);
-    for (const task of list) {
-      sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: refresh })));
+  for (const group of data.groupByBlock(tasks)) {
+    const sec = el(`<div class="section">${blockHeading(group)}</div>`);
+    for (const task of group.tasks) {
+      sec.appendChild(taskCard(task, (t) => openTaskSheet(t, { onChange: refresh }), { showAssignee: true }));
     }
     shell.appendChild(sec);
   }

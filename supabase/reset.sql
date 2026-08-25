@@ -14,9 +14,11 @@ drop trigger if exists on_auth_user_created on auth.users;
 drop table if exists public.activity        cascade;
 drop table if exists public.task_photos     cascade;
 drop table if exists public.tasks           cascade;
-drop table if exists public.task_templates  cascade;
-drop table if exists public.task_windows    cascade;
-drop table if exists public.shifts          cascade;
+drop table if exists public.block_items     cascade;
+drop table if exists public.blocks          cascade;
+drop table if exists public.task_templates  cascade;   -- from an interim version
+drop table if exists public.task_windows    cascade;   -- from an interim version
+drop table if exists public.shifts          cascade;   -- from an interim version
 drop table if exists public.member_devices  cascade;   -- from an interim version
 drop table if exists public.members         cascade;
 drop table if exists public.invites         cascade;   -- from the first version
@@ -62,6 +64,7 @@ drop function if exists public.day_schedule(date)               cascade;
 drop function if exists public.my_shift(date)                   cascade;
 drop function if exists public.match_member(uuid, text)         cascade;
 drop function if exists public.name_key(text)                   cascade;
+drop function if exists public.reorder_blocks(bigint[])         cascade;
 drop function if exists public.guard_bypassed()                 cascade;
 drop function if exists public.tasks_before_insert()            cascade;
 drop function if exists public.tasks_before_update()            cascade;

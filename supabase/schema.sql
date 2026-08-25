@@ -8,6 +8,11 @@
 --    · Employees join that team by typing the code.
 --    · Coming back later is the same email + password.
 --
+--  The work itself is a shared list: the manager names time blocks ("Morning
+--  Prep", "Closing") and fills each with tasks. Every morning those become that
+--  day's list. Anyone on the crew can pick up any task; whoever finishes it has
+--  their name recorded against it along with the photo.
+--
 --  Run this in Supabase Studio → SQL Editor → New query → Run.
 --  Re-runnable. If you ran an older version of this file first, run
 --  supabase/reset.sql once before this one.
@@ -37,7 +42,6 @@ create table if not exists public.members (
   role         text not null default 'employee' check (role in ('employee', 'manager')),
   status       text not null default 'active'
                check (status in ('active', 'disabled', 'removed')),
-  schedule_name text not null default '',       -- how they appear on the Square export
   job_title    text not null default '',
   phone        text not null default '',
   created_at   timestamptz not null default now(),
@@ -45,22 +49,39 @@ create table if not exists public.members (
 );
 create index if not exists members_team_idx on public.members (team_id);
 
-create table if not exists public.task_templates (
+-- A named part of the working day: "Morning Prep", "Lunch Rush", "Closing".
+-- Times are optional — the name is what the crew reads.
+create table if not exists public.blocks (
+  id         bigint generated always as identity primary key,
+  team_id    uuid not null references public.teams(id) on delete cascade,
+  name       text not null,
+  starts_at  time,
+  ends_at    time,
+  position   integer not null default 0,
+  active     boolean not null default true,
+  created_by uuid references public.members(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists blocks_team_idx on public.blocks (team_id, position);
+
+-- The standing list of jobs inside a block. Each one becomes a task per day.
+create table if not exists public.block_items (
   id             bigint generated always as identity primary key,
+  block_id       bigint not null references public.blocks(id) on delete cascade,
   team_id        uuid not null references public.teams(id) on delete cascade,
   title          text not null,
   description    text not null default '',
   location       text not null default '',
   priority       text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
   requires_photo boolean not null default true,
-  assigned_to    uuid references public.members(id) on delete set null,
-  recurrence     text not null default 'daily' check (recurrence in ('daily', 'weekdays', 'weekly')),
-  weekday        smallint check (weekday between 0 and 6),   -- 0 = Sunday
+  assigned_to    uuid references public.members(id) on delete set null,   -- optional; usually open to anyone
+  weekdays       smallint[],                    -- 0=Sun..6=Sat; null/empty = every day
+  position       integer not null default 0,
   active         boolean not null default true,
   created_by     uuid references public.members(id) on delete set null,
   created_at     timestamptz not null default now()
 );
-create index if not exists templates_team_idx on public.task_templates (team_id);
+create index if not exists block_items_block_idx on public.block_items (block_id, position);
 
 create table if not exists public.tasks (
   id             bigint generated always as identity primary key,
@@ -76,10 +97,9 @@ create table if not exists public.tasks (
   requires_photo boolean not null default true,
   work_date      date not null default current_date,
   due_date       date,
-  template_id    bigint references public.task_templates(id) on delete set null,
-  window_id      bigint,                        -- set by the schedule generator
-  window_start   time,
-  window_end     time,
+  block_id       bigint references public.blocks(id) on delete set null,
+  block_item_id  bigint references public.block_items(id) on delete set null,
+  completed_by   uuid references public.members(id) on delete set null,
   notes          text not null default '',
   review_note    text not null default '',
   minutes_spent  integer,
@@ -92,47 +112,9 @@ create table if not exists public.tasks (
 create index if not exists tasks_team_date_idx     on public.tasks (team_id, work_date desc);
 create index if not exists tasks_assigned_date_idx on public.tasks (assigned_to, work_date desc);
 create index if not exists tasks_status_idx        on public.tasks (status);
-create unique index if not exists tasks_template_day_idx
-  on public.tasks (template_id, work_date) where template_id is not null;
-create unique index if not exists tasks_window_day_person_idx
-  on public.tasks (window_id, work_date, assigned_to) where window_id is not null;
-
--- A shift imported from the schedule (Square export, or typed in by hand).
-create table if not exists public.shifts (
-  id          bigint generated always as identity primary key,
-  team_id     uuid not null references public.teams(id) on delete cascade,
-  member_id   uuid references public.members(id) on delete set null,
-  person_name text not null,                    -- as written on the schedule
-  work_date   date not null,
-  starts_at   time not null,
-  ends_at     time not null,
-  source      text not null default 'import',
-  created_at  timestamptz not null default now()
-);
-create index if not exists shifts_team_date_idx on public.shifts (team_id, work_date);
-create unique index if not exists shifts_unique_idx
-  on public.shifts (team_id, work_date, lower(person_name), starts_at);
-
--- "This needs doing between 2pm and 4pm." The generator turns each of these
--- into real tasks for whoever is on shift in that window.
-create table if not exists public.task_windows (
-  id             bigint generated always as identity primary key,
-  team_id        uuid not null references public.teams(id) on delete cascade,
-  title          text not null,
-  description    text not null default '',
-  location       text not null default '',
-  priority       text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
-  requires_photo boolean not null default true,
-  starts_at      time not null,
-  ends_at        time not null,
-  recurrence     text not null default 'daily' check (recurrence in ('daily', 'weekdays', 'weekly')),
-  weekday        smallint check (weekday between 0 and 6),
-  assign_mode    text not null default 'everyone' check (assign_mode in ('everyone', 'one')),
-  active         boolean not null default true,
-  created_by     uuid references public.members(id) on delete set null,
-  created_at     timestamptz not null default now()
-);
-create index if not exists task_windows_team_idx on public.task_windows (team_id);
+create unique index if not exists tasks_block_item_day_idx
+  on public.tasks (block_item_id, work_date) where block_item_id is not null;
+create index if not exists tasks_block_idx on public.tasks (block_id);
 
 create table if not exists public.task_photos (
   id           bigint generated always as identity primary key,
@@ -412,9 +394,9 @@ begin
   perform set_config('app.member_guard_bypass', '0', true);
 
   -- hand their unfinished work back to the pool
+  -- anything they hadn't finished goes back to the shared list
   update public.tasks set assigned_to = null
    where assigned_to = p_member_id and status in ('open', 'in_progress', 'rejected');
-  delete from public.shifts where member_id = p_member_id and work_date >= current_date;
 end $$;
 
 /** Put someone back on the team after they were removed. */
@@ -427,190 +409,6 @@ begin
    where id = p_member_id and team_id = public.my_team();
   perform set_config('app.member_guard_bypass', '0', true);
 end $$;
-
--- =============================================================================
---  SCHEDULES
---  A manager imports the shift schedule, defines what needs doing in which
---  time window, and the generator works out who gets what.
--- =============================================================================
-
-/** Loose name matching so "JOSE PEREZ", "jose perez" and "Perez, Jose" line up. */
-create or replace function public.name_key(p_name text)
-returns text language sql immutable as $$
-  select regexp_replace(lower(coalesce(p_name, '')), '[^a-z]', '', 'g');
-$$;
-
-/** Finds the team member a schedule name refers to, if any. */
-create or replace function public.match_member(p_team uuid, p_name text)
-returns uuid language sql stable security definer set search_path = public as $$
-  select id from public.members
-   where team_id = p_team and status = 'active'
-     and (
-       public.name_key(schedule_name) = public.name_key(p_name)
-       or public.name_key(name) = public.name_key(p_name)
-       -- "Perez, Jose" written the other way round
-       or public.name_key(name) = public.name_key(
-            split_part(p_name, ',', 2) || split_part(p_name, ',', 1))
-     )
-   order by (public.name_key(schedule_name) = public.name_key(p_name)) desc
-   limit 1;
-$$;
-
-/**
- * Saves one imported shift. Re-importing the same schedule updates in place
- * rather than duplicating, so a manager can re-upload a corrected export.
- */
-create or replace function public.upsert_shift(
-  p_person_name text,
-  p_work_date   date,
-  p_starts_at   time,
-  p_ends_at     time,
-  p_member_id   uuid default null
-) returns bigint language plpgsql security definer set search_path = public as $$
-declare
-  v_team uuid := public.my_team();
-  v_id   bigint;
-begin
-  if not public.is_manager() then raise exception 'Managers only'; end if;
-  if v_team is null then raise exception 'You are not on a team'; end if;
-  if coalesce(trim(p_person_name), '') = '' then raise exception 'Every shift needs a name'; end if;
-  if p_ends_at <= p_starts_at then
-    raise exception 'Shift for % ends before it starts', p_person_name;
-  end if;
-
-  insert into public.shifts (team_id, member_id, person_name, work_date, starts_at, ends_at)
-  values (v_team,
-          coalesce(p_member_id, public.match_member(v_team, p_person_name)),
-          trim(p_person_name), p_work_date, p_starts_at, p_ends_at)
-  on conflict (team_id, work_date, lower(person_name), starts_at) do update
-    set ends_at   = excluded.ends_at,
-        member_id = coalesce(excluded.member_id, public.shifts.member_id)
-  returning id into v_id;
-  return v_id;
-end $$;
-
-/** Ties a schedule spelling to a person, then back-fills their shifts. */
-create or replace function public.link_schedule_name(p_member_id uuid, p_schedule_name text)
-returns void language plpgsql security definer set search_path = public as $$
-declare v_team uuid := public.my_team();
-begin
-  if not public.is_manager() then raise exception 'Managers only'; end if;
-
-  perform set_config('app.member_guard_bypass', '1', true);
-  update public.members set schedule_name = trim(p_schedule_name)
-   where id = p_member_id and team_id = v_team;
-  perform set_config('app.member_guard_bypass', '0', true);
-
-  update public.shifts set member_id = p_member_id
-   where team_id = v_team
-     and member_id is null
-     and public.name_key(person_name) = public.name_key(p_schedule_name);
-end $$;
-
-/**
- * Turns the day's shifts + time windows into real, assigned tasks.
- *
- *   assign_mode 'everyone' → one task each for everyone working that window
- *   assign_mode 'one'      → a single task, given to whoever is working the
- *                            most of the window (ties broken by who has the
- *                            fewest tasks so far that day)
- *
- * Idempotent: running it twice never doubles up, and it skips anyone whose
- * task was already created — so a manager can re-run it after a late edit.
- */
-create or replace function public.generate_scheduled_tasks(p_date date default current_date)
-returns integer language plpgsql security definer set search_path = public as $$
-declare
-  v_team    uuid := public.my_team();
-  v_window  public.task_windows;
-  v_member  uuid;
-  v_rows    integer;
-  v_count   integer := 0;
-begin
-  if v_team is null then return 0; end if;
-
-  for v_window in
-    select * from public.task_windows w
-     where w.active and w.team_id = v_team
-       and (
-         w.recurrence = 'daily'
-         or (w.recurrence = 'weekdays' and extract(isodow from p_date) between 1 and 5)
-         or (w.recurrence = 'weekly' and extract(dow from p_date) = coalesce(w.weekday, 1))
-       )
-  loop
-    if v_window.assign_mode = 'one' then
-      select s.member_id into v_member
-        from public.shifts s
-        where s.team_id = v_team and s.work_date = p_date and s.member_id is not null
-          and s.starts_at < v_window.ends_at and s.ends_at > v_window.starts_at
-        order by (least(s.ends_at, v_window.ends_at) - greatest(s.starts_at, v_window.starts_at)) desc,
-                 (select count(*) from public.tasks t
-                   where t.assigned_to = s.member_id and t.work_date = p_date) asc,
-                 s.starts_at
-        limit 1;
-
-      if v_member is not null
-         and not exists (select 1 from public.tasks t
-                          where t.window_id = v_window.id and t.work_date = p_date) then
-        insert into public.tasks (team_id, title, description, location, priority, requires_photo,
-                                  assigned_to, created_by, work_date, due_date,
-                                  window_id, window_start, window_end, status)
-        values (v_team, v_window.title, v_window.description, v_window.location, v_window.priority,
-                v_window.requires_photo, v_member, v_window.created_by, p_date, p_date,
-                v_window.id, v_window.starts_at, v_window.ends_at, 'open');
-        v_count := v_count + 1;
-      end if;
-    else
-      insert into public.tasks (team_id, title, description, location, priority, requires_photo,
-                                assigned_to, created_by, work_date, due_date,
-                                window_id, window_start, window_end, status)
-      select distinct v_team, v_window.title, v_window.description, v_window.location,
-             v_window.priority, v_window.requires_photo, s.member_id, v_window.created_by,
-             p_date, p_date, v_window.id, v_window.starts_at, v_window.ends_at, 'open'
-        from public.shifts s
-       where s.team_id = v_team and s.work_date = p_date and s.member_id is not null
-         and s.starts_at < v_window.ends_at and s.ends_at > v_window.starts_at
-         and not exists (
-           select 1 from public.tasks t
-            where t.window_id = v_window.id and t.work_date = p_date and t.assigned_to = s.member_id
-         );
-      get diagnostics v_rows = row_count;
-      v_count := v_count + v_rows;
-    end if;
-  end loop;
-
-  return v_count;
-end $$;
-
-/** The day's schedule, with each person's task count — the manager's view. */
-create or replace function public.day_schedule(p_date date default current_date)
-returns table (
-  shift_id bigint, member_id uuid, person_name text, matched boolean,
-  starts_at time, ends_at time, task_count bigint, done_count bigint
-) language sql stable security definer set search_path = public as $$
-  select s.id, s.member_id,
-         coalesce(m.name, s.person_name) as person_name,
-         s.member_id is not null as matched,
-         s.starts_at, s.ends_at,
-         (select count(*) from public.tasks t
-           where t.assigned_to = s.member_id and t.work_date = p_date)                    as task_count,
-         (select count(*) from public.tasks t
-           where t.assigned_to = s.member_id and t.work_date = p_date
-             and t.status in ('submitted', 'verified'))                                   as done_count
-    from public.shifts s
-    left join public.members m on m.id = s.member_id
-   where s.team_id = public.my_team() and s.work_date = p_date and public.is_manager()
-   order by s.starts_at, person_name;
-$$;
-
-/** My own shift for a day, so the app can show "you're on 8:00–4:00". */
-create or replace function public.my_shift(p_date date default current_date)
-returns table (starts_at time, ends_at time)
-language sql stable security definer set search_path = public as $$
-  select s.starts_at, s.ends_at from public.shifts s
-   where s.member_id = auth.uid() and s.work_date = p_date
-   order by s.starts_at;
-$$;
 
 -- =============================================================================
 --  TASK RULES (enforced in the database, not just the UI)
@@ -677,6 +475,7 @@ begin
   end if;
   if new.status in ('open', 'in_progress') and old.status in ('submitted', 'verified', 'rejected') then
     new.completed_at := null;
+    new.completed_by := null;
   end if;
   return new;
 end $$;
@@ -764,10 +563,9 @@ alter table public.teams          enable row level security;
 alter table public.members        enable row level security;
 alter table public.tasks          enable row level security;
 alter table public.task_photos    enable row level security;
-alter table public.task_templates enable row level security;
+alter table public.blocks         enable row level security;
+alter table public.block_items    enable row level security;
 alter table public.activity       enable row level security;
-alter table public.shifts         enable row level security;
-alter table public.task_windows   enable row level security;
 
 -- teams: you can read your own team. Codes change only through the RPCs above.
 drop policy if exists teams_select on public.teams;
@@ -846,33 +644,22 @@ create policy photos_delete on public.task_photos for delete to authenticated
              and exists (select 1 from public.tasks t where t.id = task_id and t.status <> 'verified')))
   );
 
--- templates
-drop policy if exists templates_select on public.task_templates;
-create policy templates_select on public.task_templates for select to authenticated
+-- blocks and their standing items: everyone reads the day's plan, managers edit
+drop policy if exists blocks_select on public.blocks;
+create policy blocks_select on public.blocks for select to authenticated
   using (team_id = public.my_team());
 
-drop policy if exists templates_manager on public.task_templates;
-create policy templates_manager on public.task_templates for all to authenticated
+drop policy if exists blocks_manager on public.blocks;
+create policy blocks_manager on public.blocks for all to authenticated
   using (public.is_manager() and team_id = public.my_team())
   with check (public.is_manager() and team_id = public.my_team());
 
--- shifts: you can see your own; a manager sees the whole schedule
-drop policy if exists shifts_select on public.shifts;
-create policy shifts_select on public.shifts for select to authenticated
-  using (team_id = public.my_team() and (public.is_manager() or member_id = public.me()));
-
-drop policy if exists shifts_manager on public.shifts;
-create policy shifts_manager on public.shifts for all to authenticated
-  using (public.is_manager() and team_id = public.my_team())
-  with check (public.is_manager() and team_id = public.my_team());
-
--- task windows: everyone can read them (they explain the day), managers edit
-drop policy if exists windows_select on public.task_windows;
-create policy windows_select on public.task_windows for select to authenticated
+drop policy if exists block_items_select on public.block_items;
+create policy block_items_select on public.block_items for select to authenticated
   using (team_id = public.my_team());
 
-drop policy if exists windows_manager on public.task_windows;
-create policy windows_manager on public.task_windows for all to authenticated
+drop policy if exists block_items_manager on public.block_items;
+create policy block_items_manager on public.block_items for all to authenticated
   using (public.is_manager() and team_id = public.my_team())
   with check (public.is_manager() and team_id = public.my_team());
 
@@ -885,29 +672,35 @@ create policy activity_select on public.activity for select to authenticated
 --  RPCs used by the app
 -- =============================================================================
 
+/**
+ * Builds today's shared list from the blocks. A task set to particular weekdays
+ * only appears on those days. Idempotent — safe on every load, and safe after
+ * the manager edits a block mid-day (it only adds what's new). Tasks come out
+ * unassigned: anyone on the crew can pick one up.
+ */
 create or replace function public.ensure_todays_tasks(p_date date default current_date)
 returns integer language plpgsql security definer set search_path = public as $$
 declare v_count integer := 0; v_team uuid := public.my_team();
 begin
   if v_team is null then return 0; end if;
 
-  with due as (
-    select t.* from public.task_templates t
-     where t.active and t.team_id = v_team
-       and (
-         t.recurrence = 'daily'
-         or (t.recurrence = 'weekdays' and extract(isodow from p_date) between 1 and 5)
-         or (t.recurrence = 'weekly' and extract(dow from p_date) = coalesce(t.weekday, 1))
-       )
-  ), inserted as (
+  with inserted as (
     insert into public.tasks (team_id, title, description, location, priority, requires_photo,
-                              assigned_to, created_by, work_date, due_date, template_id, status)
-    select d.team_id, d.title, d.description, d.location, d.priority, d.requires_photo,
-           d.assigned_to, d.created_by, p_date, p_date, d.id, 'open'
-      from due d
-     where not exists (
-       select 1 from public.tasks x where x.template_id = d.id and x.work_date = p_date
-     )
+                              assigned_to, created_by, work_date, due_date,
+                              block_id, block_item_id, status)
+    select i.team_id, i.title, i.description, i.location, i.priority, i.requires_photo,
+           i.assigned_to, i.created_by, p_date, p_date, i.block_id, i.id, 'open'
+      from public.block_items i
+      join public.blocks b on b.id = i.block_id
+     where i.active and b.active and i.team_id = v_team
+       and (
+         i.weekdays is null
+         or array_length(i.weekdays, 1) is null
+         or extract(dow from p_date)::smallint = any (i.weekdays)
+       )
+       and not exists (
+         select 1 from public.tasks t where t.block_item_id = i.id and t.work_date = p_date
+       )
     returning 1
   )
   select count(*) into v_count from inserted;
@@ -931,6 +724,7 @@ begin
   update public.tasks
      set status        = 'submitted',
          assigned_to   = coalesce(assigned_to, public.me()),
+         completed_by  = public.me(),          -- whose name goes on the finished job
          notes         = coalesce(nullif(p_notes, ''), notes),
          minutes_spent = coalesce(p_minutes, minutes_spent),
          review_note   = ''
@@ -1009,8 +803,8 @@ $$;
 
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on
-  public.tasks, public.task_photos, public.task_templates, public.members,
-  public.shifts, public.task_windows to authenticated;
+  public.tasks, public.task_photos, public.members,
+  public.blocks, public.block_items to authenticated;
 grant select on public.teams, public.activity to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 alter default privileges in schema public grant usage, select on sequences to authenticated;
@@ -1035,13 +829,6 @@ grant execute on function public.range_stats(date, date, uuid)         to authen
 grant execute on function public.touch_last_seen()                     to authenticated;
 grant execute on function public.remove_member(uuid)                   to authenticated;
 grant execute on function public.restore_member(uuid)                  to authenticated;
-grant execute on function public.upsert_shift(text, date, time, time, uuid) to authenticated;
-grant execute on function public.link_schedule_name(uuid, text)        to authenticated;
-grant execute on function public.generate_scheduled_tasks(date)        to authenticated;
-grant execute on function public.day_schedule(date)                    to authenticated;
-grant execute on function public.my_shift(date)                        to authenticated;
-grant execute on function public.match_member(uuid, text)              to authenticated;
-grant execute on function public.name_key(text)                        to authenticated;
 
 -- =============================================================================
 --  STORAGE — private bucket for the photo proof

@@ -44,9 +44,9 @@ echo "schema is re-runnable (idempotent)"
 psql -h "$SOCK" -p "$PORT" -U postgres -d tracker -f "$HERE/rls-test.sql"
 
 echo
-echo "=== scheduling ==="
-$PSQL -c "drop database if exists sched;" >/dev/null
-$PSQL -c "create database sched;" >/dev/null
-$PSQL -d sched -f "$HERE/local-stubs.sql" >/dev/null
-$PSQL -d sched -f "$HERE/../supabase/schema.sql" >/dev/null
-psql -h "$SOCK" -p "$PORT" -U postgres -d sched -f "$HERE/schedule-test.sql"
+echo "=== blocks ==="
+$PSQL -c "drop database if exists blocks;" >/dev/null
+$PSQL -c "create database blocks;" >/dev/null
+$PSQL -d blocks -f "$HERE/local-stubs.sql" >/dev/null
+$PSQL -d blocks -f "$HERE/../supabase/schema.sql" >/dev/null
+psql -h "$SOCK" -p "$PORT" -U postgres -d blocks -f "$HERE/blocks-test.sql"

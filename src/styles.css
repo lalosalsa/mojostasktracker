@@ -284,6 +284,19 @@ a { color: var(--brand); }
   padding: 14px; font-variant-numeric: tabular-nums;
 }
 
+/* the S M T W T F S day picker */
+.daypick { display: flex; gap: 6px; }
+.daypick .day {
+  flex: 1; min-width: 0; height: 42px; border-radius: 11px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); font-weight: 700; font-size: 13.5px; cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.daypick .day.on {
+  background: var(--brand); border-color: var(--brand); color: #fff;
+}
+.daypick .day:active { transform: scale(.95); }
+
 /* ------------------------------------------------------------------ tabbar */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;

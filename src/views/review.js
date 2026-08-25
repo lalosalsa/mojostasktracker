@@ -35,7 +35,7 @@ export async function reviewView(container) {
           <div style="flex:1;min-width:0">
             <h3 style="font-size:15.5px;line-height:1.3">${esc(task.title)}</h3>
             <p class="small muted" style="margin-top:5px">
-              ${esc(task.assignee?.name || 'Unassigned')} · finished ${esc(timeAgo(task.completed_at))}
+              ${esc(task.finisher?.name || task.assignee?.name || 'Someone')} · finished ${esc(timeAgo(task.completed_at))}
               ${task.location ? ` · 📍 ${esc(task.location)}` : ''}
             </p>
           </div>

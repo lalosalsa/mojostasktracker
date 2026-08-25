@@ -151,45 +151,28 @@ Tell each person to open the link in their phone browser and:
 It then opens full-screen from the home screen icon, like any other app, and
 stays signed in.
 
-## 11. Set up the daily checklist (optional)
+## 11. Build the day
 
-**More → Recurring tasks** — add the jobs that happen every day or every week.
-They appear on the crew's Today screen automatically each morning.
+This is the part that makes the app yours.
 
-## 12. Working from your Square schedule (optional)
+**Blocks** tab → **New block**. Name it the way your crew talks about the day —
+"Opening", "Morning Prep", "Lunch Rush", "Closing". Times are optional; add them
+and the crew sees "7am – 11am" under the heading, leave them off and it just
+reads "any time".
 
-If you roster people in Square, the app can hand out work based on who is
-actually clocked on.
+Then **Add a task to <block>** for each job in it. For each one you can set:
 
-**One-time setup — say what needs doing when:**
+- **Which days** — tap the S M T W T F S buttons to pick any combination. All
+  seven are on by default; turn some off for a job that's only Mon/Wed/Fri, or
+  weekends only.
+- Whether a **photo** is required (on by default).
+- **Priority** and **location**.
+- Whether it's open to anyone or pinned to one person.
 
-**Schedule** tab → **Time blocks** → **New time block**. Each one is a job plus
-the window it has to happen in, e.g. "Restock the front cooler, between 2:00 and
-4:00 PM". Choose whether it goes to *everyone on shift* in that window or to
-*just one person*.
+Use the ↑ ↓ buttons to put the blocks in the order the day actually runs.
 
-**Each week — import the schedule:**
-
-1. In Square, export the schedule (**.xlsx** or **.csv**, one row per shift).
-2. **Schedule** tab → **Import schedule** → pick the file.
-3. The app guesses which columns hold the employee, date and times, and shows you
-   what it read before saving anything. Fix the dropdowns if a column is wrong.
-   Rows it can't read — someone marked OFF, a blank date — are listed so you can
-   see exactly what was skipped.
-4. **Import**.
-
-**Then hand out the work:** on the Schedule tab pick the day and tap
-**Hand out tasks**. Everyone on shift gets the time blocks that overlap their
-hours, and it shows up on their phone under Today with the time on it.
-
-Tap it again after a schedule change — it only ever adds what's missing, so it
-can't double up.
-
-**Names that don't match:** if Square writes someone as "D. Fox" and your team
-has "Dee Fox", they show up as **not linked**. Tap the name, pick the person,
-and the app remembers that spelling for future imports.
-
----
+That's it. Every morning the app turns those blocks into that day's list on
+everyone's phone. Add a task at 2pm and it shows up right away.
 
 ## Pushing this repo to GitHub
 
@@ -200,8 +183,9 @@ git push -u origin main
 
 ## Day-to-day
 
-- **Crew:** open the app → work the list → photo → done.
-- **You:** Overview for the pulse of the day, Review to check photos and sign
+- **Crew:** open the app → the day's list is there, grouped by block → do a job,
+  photo it, mark it done. Their name goes on it automatically.
+- **You:** Overview for the pulse of the day, Review to check the photos and sign
   off, Reports → **Download CSV** for records.
 
 ## Costs
@@ -229,17 +213,12 @@ join again with the right code.
 **Screens error out right after signing in.** The database tables aren't there —
 run `supabase/schema.sql` (step 2).
 
-**Import says it can't read the dates or times.** Change the column dropdowns on
-the import screen — the preview updates as you do. If your dates are day/month,
-tick that box. Rows the app skipped are listed with the reason.
+**The crew's list is empty.** No blocks have tasks in them yet — go to **Blocks**
+and add some. The list builds from there.
 
-**Someone on the schedule shows "not linked".** Square spells their name
-differently from their app account. Tap the name on the Schedule tab and pick
-the person; it's remembered from then on.
-
-**Handing out tasks assigned nothing.** Either nobody's shift overlaps a time
-block's window, or everyone already has those tasks. The Schedule tab shows who
-is on and how many tasks each has.
+**A task I added didn't show up.** It appears on today's list as soon as you save
+it. If the crew's phone still shows the old list, they can pull down to refresh
+or reopen the app.
 
 **A photo won't upload.** Check **Storage** shows a private bucket named
 `task-photos`; if not, re-run the schema.
