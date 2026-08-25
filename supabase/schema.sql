@@ -251,6 +251,25 @@ exception when undefined_table then
 end
 $reconcile$;
 
+-- Auto-numbered ids: after an upgrade, a restore from backup, or any import
+-- that supplied ids explicitly, the counter can sit behind the rows already
+-- there and the next insert collides. Nudge each one past the highest id.
+do $sequences$
+declare
+  v_table text;
+  v_seq   text;
+  v_max   bigint;
+begin
+  foreach v_table in array array['tasks', 'block_items', 'blocks', 'task_photos', 'activity'] loop
+    if to_regclass('public.' || v_table) is null then continue; end if;
+    v_seq := pg_get_serial_sequence('public.' || v_table, 'id');
+    if v_seq is null then continue; end if;
+    execute format('select coalesce(max(id), 0) from public.%I', v_table) into v_max;
+    perform setval(v_seq, v_max + 1, false);
+  end loop;
+end
+$sequences$;
+
 -- Indexes that depend on the columns above, so they run only once those exist.
 create unique index if not exists tasks_block_item_day_idx
   on public.tasks (block_item_id, work_date) where block_item_id is not null;

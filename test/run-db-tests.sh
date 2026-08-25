@@ -69,3 +69,11 @@ $PSQL -d upgraded -f "$HERE/legacy-shape.sql" >/dev/null
 $PSQL -d upgraded -f "$HERE/../supabase/schema.sql" >/dev/null
 echo "old project upgraded in place"
 psql -h "$SOCK" -p "$PORT" -U postgres -d upgraded -f "$HERE/upgrade-test.sql"
+
+echo
+echo "=== data preservation on upgrade ==="
+$PSQL -c "drop database if exists preserved;" >/dev/null
+$PSQL -c "create database preserved;" >/dev/null
+$PSQL -d preserved -f "$HERE/local-stubs.sql" >/dev/null
+$PSQL -d preserved -f "$HERE/legacy-shape.sql" >/dev/null
+(cd "$HERE/.." && psql -h "$SOCK" -p "$PORT" -U postgres -d preserved -f test/preserve-test.sql)

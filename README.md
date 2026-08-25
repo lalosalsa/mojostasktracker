@@ -154,7 +154,7 @@ src/                 app source (plain ES modules, no framework)
   views/             one file per screen
   index.html         app shell   styles.css   manifest   sw.js   icons/
 supabase/schema.sql  tables, RLS policies, triggers, RPCs, storage bucket
-supabase/reset.sql   drops it all, for starting over from an older version
+supabase/reset.sql   DESTRUCTIVE — drops everything, only for starting over
 supabase/diagnose.sql  read-only health check — what's set up, what isn't
 scripts/build.js     esbuild bundle → public/, stamps the service worker
 scripts/generate-icons.js   draws the PNG app icons from scratch

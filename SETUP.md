@@ -214,6 +214,31 @@ database and 1 GB of file storage — photos are compressed to a few hundred KB
 each, so that's thousands of them. If you outgrow it, Supabase Pro is $25/month
 and Vercel stays free for this kind of site.
 
+## Updating without losing anything
+
+**Run `supabase/schema.sql`. That is the whole update, and it keeps your data.**
+
+It only ever adds and repairs — new tables, missing columns, corrected defaults
+and rules. It never drops a table or deletes a row, and it is safe to run as
+many times as you like.
+
+**Never run `supabase/reset.sql` unless you actually want to start over.** That
+one deletes everything: teams, crew, blocks, tasks and the photo records. It
+exists only for wiping a test project.
+
+So the update is:
+
+1. Supabase → **SQL Editor** → **New query** → paste all of `supabase/schema.sql`
+   → **Run**.
+2. Redeploy on Vercel.
+3. Check the two version numbers match (see below).
+
+**Want a safety copy first?** Supabase → **Database** → **Backups** takes one on
+paid plans; on the free plan use **Table Editor** → each table → **Export as CSV**
+for anything you'd hate to lose. This upgrade is covered by a test that fills a
+project with teams, crew, blocks, tasks and photos, applies the schema over the
+top, and checks every row and every link survived — but a copy costs nothing.
+
 ## Something's wrong — start here
 
 Run **`supabase/diagnose.sql`** in the SQL Editor. It changes nothing, works even
