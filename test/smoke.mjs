@@ -434,6 +434,36 @@ check('finished work drops off the crew list',
   !todayText.includes('Sweep the shop floor'), 'the done task is still showing');
 check('the outstanding task is still there', todayText.includes('Restock the van'));
 check('the day\'s progress still counts what was done', todayText.includes('1 of 2 done today'));
+
+// the ring label has to sit inside the stroke at every value, 100% included
+const ringFit = await page.evaluate(() => {
+  const ring = document.querySelector('.ring');
+  if (!ring) return null;
+  const measure = () => {
+    const box = ring.getBoundingClientRect();
+    const cx = box.left + box.width / 2;
+    const cy = box.top + box.height / 2;
+    const innerR = box.width / 2 - 7;              // inside the 7px stroke
+    const reach = ['.pct', '.cap'].flatMap((sel) => {
+      const t = ring.querySelector(sel).getBoundingClientRect();
+      return [
+        Math.hypot(t.left - cx, t.top - cy), Math.hypot(t.right - cx, t.top - cy),
+        Math.hypot(t.left - cx, t.bottom - cy), Math.hypot(t.right - cx, t.bottom - cy),
+      ];
+    });
+    return { fits: Math.max(...reach) <= innerR, reach: Math.max(...reach), innerR };
+  };
+  const asIs = measure();
+  // now force the widest case it can ever show
+  ring.classList.add('is-full');
+  ring.querySelector('.pct').textContent = '100%';
+  const full = measure();
+  return { asIs, full };
+});
+check('the percentage sits inside the ring', ringFit?.asIs.fits,
+  `text reaches ${ringFit?.asIs.reach.toFixed(1)}px of a ${ringFit?.asIs.innerR}px radius`);
+check('and still fits at 100%', ringFit?.full.fits,
+  `text reaches ${ringFit?.full.reach.toFixed(1)}px of a ${ringFit?.full.innerR}px radius`);
 await page.screenshot({ path: 'test/shots/10-today.png', fullPage: true });
 
 console.log('\nPhoto upload');

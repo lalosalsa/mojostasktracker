@@ -63,8 +63,10 @@ export function progressRing(done, total) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const r = 32;
   const c = 2 * Math.PI * r;
+  // 100% is the widest the number ever gets — drop a point of type so it keeps
+  // clear of the stroke.
   return el(`
-    <div class="ring" role="img" aria-label="${pct}% of today's tasks complete">
+    <div class="ring ${pct === 100 ? 'is-full' : ''}" role="img" aria-label="${pct}% of today's tasks complete">
       <svg width="78" height="78" viewBox="0 0 78 78">
         <defs>
           <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
@@ -76,7 +78,7 @@ export function progressRing(done, total) {
         <circle class="value" cx="39" cy="39" r="${r}" fill="none" stroke-width="7"
                 stroke-dasharray="${c}" stroke-dashoffset="${c - (c * pct) / 100}"/>
       </svg>
-      <div class="label">${pct}%<small>DONE</small></div>
+      <div class="label"><span class="pct">${pct}%</span><span class="cap">DONE</span></div>
     </div>`);
 }
 
